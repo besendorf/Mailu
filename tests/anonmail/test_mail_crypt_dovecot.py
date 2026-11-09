@@ -231,6 +231,9 @@ def test_daemon_lmtp_and_authenticated_lua_prefetch(dovecot, encrypted_user, app
     if os.getuid() == 0:
         pytest.skip('Run the rootless daemon test as a non-root user')
     _run, home, config, prefix = dovecot
+    # The test's trusted proxy/backend peer is loopback, not the deployment's
+    # Docker subnet used by allow_real_nets in Mailu's passdb response.
+    app.config['SUBNET'] = '127.0.0.0/8'
     encrypted_user.dovecot_uid = os.getuid()
     models.db.session.commit()
     original_fields = views._userdb_fields
@@ -324,6 +327,19 @@ service lmtp {{
             with pytest.raises(imaplib.IMAP4.error):
                 client.login(encrypted_user.email, 'wrong')
             assert client.login(encrypted_user.email, 'test-password')[0] == 'OK'
+            assert client.select('INBOX')[0] == 'OK'
+            status, data = client.fetch('1', '(BODY[])')
+            assert status == 'OK' and any(MESSAGE in item[1] for item in data if isinstance(item, tuple))
+        raw_token = 'c' * 32
+        token = models.Token(user=encrypted_user)
+        token.set_password(raw_token)
+        models.db.session.add(token)
+        models.db.session.flush()
+        mail_crypt.enroll_token(encrypted_user, token, raw_token, 'test-password')
+        models.db.session.commit()
+        app.config['AUTH_REQUIRE_TOKENS'] = True
+        with imaplib.IMAP4('127.0.0.1', imap_port) as client:
+            assert client.login(encrypted_user.email, raw_token)[0] == 'OK'
             assert client.select('INBOX')[0] == 'OK'
             status, data = client.fetch('1', '(BODY[])')
             assert status == 'OK' and any(MESSAGE in item[1] for item in data if isinstance(item, tuple))
