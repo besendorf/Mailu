@@ -66,6 +66,16 @@ if not os.path.ismount(runtime_root):
     raise RuntimeError(
         f"{runtime_root} must be mounted as tmpfs by the Compose configuration"
     )
+with open('/proc/self/mountinfo', encoding='utf-8') as mountinfo:
+    runtime_is_tmpfs = any(
+        len(left.split()) > 4 and left.split()[4] == runtime_root
+        and right.split()[0] == 'tmpfs'
+        for line in mountinfo
+        for left, separator, right in [line.partition(' - ')]
+        if separator and right.split()
+    )
+if not runtime_is_tmpfs:
+    raise RuntimeError(f'{runtime_root} must be tmpfs; persistent temporary storage could expose decrypted mail')
 os.chown(runtime_root, 0, 0)
 os.chmod(runtime_root, 0o755)
 for runtime_name in (

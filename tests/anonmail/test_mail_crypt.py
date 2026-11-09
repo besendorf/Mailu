@@ -246,6 +246,62 @@ def test_cli_key_export_and_recovery_do_not_print_unlock_secret(app, encrypted_u
     private(encrypted_user, 'changed-test')
 
 
+def test_cli_restores_original_envelope_and_checks_mailbox_identity(app, encrypted_user, tmp_path):
+    user = encrypted_user
+    backup = tmp_path / 'envelope.json'
+    backup.write_text(user.mail_crypt_key.envelope)
+    original = user.mail_crypt_key.envelope
+    mailbox_id = user.mail_crypt_key.mailbox_id
+    user.mail_crypt_key.envelope = '{}'
+    models.db.session.commit()
+    runner = app.test_cli_runner()
+    args = ['mailu', 'mail-crypt', 'restore', user.email, str(backup), '--mailbox-id', mailbox_id]
+    result = runner.invoke(app.cli, args, input='test-password\n')
+    assert result.exit_code == 0, result.output
+    assert user.mail_crypt_key.envelope == original
+    private(user)
+    args[-1] = '78658d81-a3cb-421a-9e90-9f328aa2bc89'
+    result = runner.invoke(app.cli, args, input='test-password\n')
+    assert result.exit_code != 0
+    assert user.mail_crypt_key.envelope == original
+
+
+def test_encryption_status_page_and_webmail_restriction(app, client, encrypted_user):
+    app.config['WTF_CSRF_ENABLED'] = False
+    with client.session_transaction() as session:
+        session['_user_id'] = encrypted_user.email
+        session['_fresh'] = True
+    response = client.get('/admin/user/encryption')
+    assert response.status_code == 200
+    assert b'Active sessions keep their previous storage settings' in response.data
+    assert b'Create an enrolled app token' in response.data
+    assert client.get('/internal/auth/user').status_code == 403
+
+
+def test_migration_refuses_to_destroy_existing_key_records():
+    import importlib.util
+    from pathlib import Path
+    import sqlalchemy as sa
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+    path = Path(__file__).resolve().parents[2] / 'core/admin/migrations/versions/7e83a9c0d142_mail_crypt.py'
+    spec = importlib.util.spec_from_file_location('crypt_migration', path)
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    engine = sa.create_engine('sqlite:///:memory:')
+    with engine.begin() as connection:
+        connection.execute(sa.text('CREATE TABLE user (email VARCHAR(255) PRIMARY KEY)'))
+        migration.op = Operations(MigrationContext.configure(connection))
+        migration.upgrade()
+        migration.downgrade()
+        migration.upgrade()
+        connection.execute(sa.text("INSERT INTO user VALUES ('alice@example.org')"))
+        connection.execute(sa.text("INSERT INTO mail_crypt_key VALUES ('alice@example.org', 'test-uuid', '{}', 1)"))
+        with pytest.raises(RuntimeError, match='encryption key records still exist'):
+            migration.downgrade()
+        assert connection.execute(sa.text('SELECT COUNT(*) FROM mail_crypt_key')).scalar() == 1
+
+
 def test_non_encrypted_accounts_keep_their_userdb_fields(app, client):
     with app.app_context():
         domain = models.Domain(name='plain.example')

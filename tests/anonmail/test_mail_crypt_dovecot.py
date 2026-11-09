@@ -143,16 +143,32 @@ sieve_script test {{
     for key, value in mail_crypt.public_fields(encrypted_user).items():
         command += ['-o', f'{key}={value}']
     command += ['-o', f'mail_temp_dir={tmp_path}']
-    result = subprocess.run(command, input=MESSAGE, capture_output=True, timeout=20)
-    assert result.returncode == 0, result.stderr.decode()
-    assert b'Error:' not in result.stderr, result.stderr.decode()
+    # Separate processes have no retained private key or in-memory index.
+    for _ in range(2):
+        result = subprocess.run(command, input=MESSAGE, capture_output=True, timeout=20)
+        assert result.returncode == 0, result.stderr.decode()
+        assert b'Error:' not in result.stderr, result.stderr.decode()
     files = list((home / 'mail/.Archive/new').glob('*'))
-    assert len(files) == 1, result.stderr.decode()
-    assert files[0].read_bytes().startswith(migration.MAGIC)
+    assert len(files) == 2, result.stderr.decode()
+    assert all(file.read_bytes().startswith(migration.MAGIC) for file in files)
     fields = {**mail_crypt.public_fields(encrypted_user), **private(encrypted_user)}
     fields['mail_plugins/sieve'] = 'no'
     result = run(b'a1 SELECT Archive\r\na2 FETCH 1 BODY[]\r\na3 LOGOUT\r\n', fields)
     assert MESSAGE in result.stdout, result.stderr.decode()
+
+
+def test_large_message_partial_read_uses_configured_temporary_directory(dovecot, encrypted_user):
+    run, home, _config, _prefix = dovecot
+    public = mail_crypt.public_fields(encrypted_user)
+    message = b'Subject: large mail\r\n\r\n' + b'abcdefgh' * 65536 + b'\r\n'
+    result = run(b'a1 APPEND INBOX {' + str(len(message)).encode() + b'+}\r\n' + message + b'\r\na2 LOGOUT\r\n', public)
+    assert b'a1 OK' in result.stdout, result.stderr.decode()
+    fields = {**public, **private(encrypted_user)}
+    result = run(b'a1 SELECT INBOX\r\na2 FETCH 1 BODY.PEEK[TEXT]<350000.128>\r\na3 LOGOUT\r\n', fields)
+    assert b'abcdefgh' * 16 in result.stdout, result.stderr.decode()
+    for path in home.rglob('*'):
+        if path.is_file():
+            assert b'abcdefgh' * 16 not in path.read_bytes()
 
 
 def test_unencrypted_accounts_are_unchanged(dovecot):

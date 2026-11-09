@@ -1,8 +1,6 @@
 name: Mailbox encryption
 
 on:
-  push:
-    branches: [per-user-mail-crypt]
   pull_request:
     paths:
       - core/admin/**
@@ -26,7 +24,7 @@ jobs:
       - name: Install Dovecot 2.4 and Python
         run: |
           apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y python3-venv dovecot-core dovecot-imapd dovecot-lmtpd lua-cjson libmagic1 openssl
+          DEBIAN_FRONTEND=noninteractive apt-get install -y python3-venv dovecot-core dovecot-auth-lua dovecot-imapd dovecot-lmtpd lua-cjson libmagic1 openssl
           python3 -m venv /opt/mailu-tests
           /opt/mailu-tests/bin/pip install -r tests/mail-crypt-requirements.txt -e core/base/libs/socrate -e core/base/libs/podop
           useradd --create-home --uid 1000 mailu-test

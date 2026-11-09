@@ -97,6 +97,8 @@ def _crypt_user(username):
 def mail_crypt_enable(username, acknowledge_limitations):
     """Encrypt future writes; migrate old mail separately while offline."""
     from mailu import mail_crypt
+    if not acknowledge_limitations:
+        raise click.UsageError('Pass --acknowledge-limitations after reviewing mailbox encryption activation and backup requirements.')
     try:
         account = _crypt_user(username)
         password = click.prompt('Current mailbox password', hide_input=True)
