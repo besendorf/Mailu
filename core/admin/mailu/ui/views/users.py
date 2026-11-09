@@ -168,13 +168,15 @@ def user_settings(user_email):
 @flask_login.login_required
 def user_encryption():
     user = models.db.session.get(models.User, flask_login.current_user.email)
+    if not user or not user.enabled:
+        flask.abort(403)
     form = forms.MailCryptForm()
     if form.validate_on_submit():
         if utils.is_demo_account(user):
             flask.abort(403)
         mail_crypt.enable(user, form.password.data)
         models.db.session.commit()
-        flask.flash('Future mailbox writes will be encrypted. Enroll your app tokens and export a key backup before migrating existing mail.', 'success')
+        flask.flash('Encryption is saved for new mail processes. Ask your operator to disconnect/restart existing processes, enroll app tokens, and export a key backup before migrating old mail.', 'success')
         return flask.redirect(flask.url_for('.user_encryption'))
     return flask.render_template('user/encryption.html', user=user, form=form)
 

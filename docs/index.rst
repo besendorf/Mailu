@@ -64,6 +64,7 @@ the version of Mailu that you are running.
     :caption: Administration
 
     maintain
+    mail-crypt
     webadministration
     antispam
     anonmail

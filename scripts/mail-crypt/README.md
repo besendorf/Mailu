@@ -1,17 +1,17 @@
-# Per-user mail-crypt keyring experiment
+# Offline per-user mail-crypt keyring tools
 
-An offline prototype for [Mailu #1040](https://github.com/Mailu/Mailu/issues/1040).
-It explores credential-independent mailbox keys: a random P-256 private key is
-wrapped separately for each enrolled password or app credential. Changing a
-credential rewraps the same key rather than re-encrypting all messages.
+These offline tools use the same versioned envelope implementation as Mailu's
+integrated per-user mailbox encryption. A random P-256 private key is wrapped
+separately for each enrolled password or app credential. Changing a credential
+rewraps the same key rather than re-encrypting messages.
 
-**This does not enable mail encryption in Mailu. Do not use the prototype with
-production mail.** It has no database integration, authenticated unlock endpoint,
-Dovecot configuration, live-session revocation, or mail migration. Its storage
-format is experimental. See the [integration design](../../design/per-user-mail-crypt.md)
-for the remaining work and security boundaries.
+For live account activation, token enrollment, backups, recovery and old-mail
+migration, use the [operator instructions](../../docs/mail-crypt.rst). The tools
+in this directory operate only on separate JSON files; their output is not
+written to Mailu's database automatically. The symlink to the application module
+keeps the offline and live implementations identical without importing Flask.
 
-## Run the experiment
+## Run the offline tools
 
 Use Python 3.9+ and `cryptography` 44+ with Argon2id support. Install the isolated
 dependencies in a virtual environment, from this directory:
@@ -91,6 +91,6 @@ swap, crash dump, or redirected output from retaining plaintext.
 - These checks provide neither secure memory erasure in Python nor an
   end-to-end-encryption guarantee against the running server administrator.
 
-The tests exercise actual Argon2id/AES-GCM, credential lifecycle, tampering,
-identity/slot swapping, malformed JSON, file handling, and PEM interoperability.
-They do **not** establish Dovecot runtime compatibility or encrypted delivery.
+The offline tests exercise actual Argon2id/AES-GCM, credential lifecycle,
+tampering, identity/slot swapping, malformed JSON, file handling and PEM output.
+Application and real Dovecot tests are in `tests/anonmail/test_mail_crypt*.py`.

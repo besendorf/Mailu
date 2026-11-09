@@ -313,7 +313,9 @@ service lmtp {{
             assert status == 'OK' and any(MESSAGE in item[1] for item in data if isinstance(item, tuple))
     finally:
         process.terminate()
-        process.communicate(timeout=5)
+        _out, diagnostics = process.communicate(timeout=5)
+        if diagnostics:
+            print(diagnostics.decode(errors='replace'))
         http.shutdown()
         thread.join(timeout=5)
         runtime_directory.cleanup()
