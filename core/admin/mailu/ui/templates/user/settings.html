@@ -9,6 +9,7 @@
 {%- endblock %}
 
 {%- block content %}
+<p><a href="{{ url_for('.user_encryption') }}">{{ _('Mailbox encryption') }}</a></p>
 {% if not user.tokens %}
 <div class="alert alert-info" role="status">
   {% trans %}No authentication tokens are configured for this account. Create a token to connect your email app, and save it in the app's password fields for incoming and outgoing mail.{% endtrans %}

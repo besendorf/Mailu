@@ -1,4 +1,4 @@
-from mailu import models, utils, oauth2
+from mailu import models, utils, oauth2, mail_crypt
 from mailu.ui import ui, forms, access
 
 from passlib import pwd
@@ -7,6 +7,7 @@ import flask
 import flask_login
 import time
 import wtforms_components
+import wtforms
 
 
 @ui.route('/token/list', methods=['GET', 'POST'], defaults={'user_email': None})
@@ -25,6 +26,10 @@ def token_create(user_email):
     user_email = user_email or flask_login.current_user.email
     user = models.db.session.get(models.User, user_email) or flask.abort(404)
     form = forms.TokenForm()
+    if user.mail_crypt_key is None:
+        del form.mailbox_password
+    else:
+        form.mailbox_password.validators = [wtforms.validators.DataRequired()]
     wtforms_components.read_only(form.displayed_password)
     if not form.raw_password.data:
         form.raw_password.data = pwd.genword(entropy=128, length=32, charset="hex")
@@ -39,6 +44,9 @@ def token_create(user_email):
         else:
             del token.ip
         models.db.session.add(token)
+        models.db.session.flush()
+        if user.mail_crypt_key is not None:
+            mail_crypt.enroll_token(user, token, form.raw_password.data, form.mailbox_password.data)
         models.db.session.commit()
         flask.flash('Authentication token created')
         return flask.redirect(
@@ -52,6 +60,7 @@ def token_create(user_email):
 def token_delete(token_id):
     token = models.db.session.get(models.Token, token_id) or flask.abort(404)
     user = token.user
+    mail_crypt.forget_token(token)
     models.db.session.delete(token)
     models.db.session.commit()
     flask.flash('Authentication token deleted')

@@ -5,7 +5,7 @@
 # core/admin
 alembic
 Babel
-bcrypt
+bcrypt<5
 click
 dnspython
 Flask

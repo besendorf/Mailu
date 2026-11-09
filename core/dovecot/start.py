@@ -79,6 +79,15 @@ for runtime_name in (
     os.chown(runtime_path, 0, 0)
     os.chmod(runtime_path, 0o755)
 
+# Decryption/compression may spill seekable streams into temporary files.
+# Keep those files in the existing tmpfs, outside persistent mailbox storage.
+# Mail workers use distinct UIDs; sticky mode and safe_mkstemp's 0600/O_EXCL
+# files provide the same isolation as a conventional /tmp directory.
+crypt_temp = os.path.join(runtime_root, 'run/mailu-crypt-tmp')
+os.makedirs(crypt_temp, mode=0o1777, exist_ok=True)
+os.chown(crypt_temp, 0, 0)
+os.chmod(crypt_temp, 0o1777)
+
 runtime_private_dir = os.path.join(runtime_root, "run/podop")
 os.makedirs(runtime_private_dir, mode=0o710, exist_ok=True)
 os.chown(

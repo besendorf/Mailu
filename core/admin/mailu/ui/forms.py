@@ -300,7 +300,14 @@ class UserReplyForm(flask_wtf.FlaskForm):
         return valid
 
 
+class MailCryptForm(flask_wtf.FlaskForm):
+    password = fields.PasswordField(_('Current mailbox password'), [validators.DataRequired()])
+    acknowledge = fields.BooleanField(_('I understand the limitations and have a backup'), [validators.DataRequired()])
+    submit = fields.SubmitField(_('Enable encryption for future mail'))
+
+
 class TokenForm(flask_wtf.FlaskForm):
+    mailbox_password = fields.PasswordField(_('Mailbox encryption password'), [validators.Optional()])
     displayed_password = fields.StringField(
         _('Authentication token (shown once)')
     )

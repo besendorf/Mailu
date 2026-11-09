@@ -22,10 +22,7 @@ def oauth2_introspect():
         models.OAuth2Grant.access_expires_at, models.OAuth2Grant.client_id,
         models.OAuth2Grant.scope,
     ).filter_by(grant_id=parsed[1]).first() if parsed else None
-    user = models.User.query.with_entities(
-        models.User.email, models.User.enabled, models.User.enable_imap,
-        models.User.enable_pop,
-    ).filter_by(_email=grant.user_email).first() if grant else None
+    user = models.User.query.filter_by(_email=grant.user_email).first() if grant else None
     protocol = flask.request.headers.get('X-Dovecot-Auth-Protocol')
     protocol_scopes = {
         'imap': 'imap',
@@ -53,6 +50,7 @@ def oauth2_introspect():
         not grant or parsed[2] != grant.token_generation
         or grant.access_expires_at <= now or not user or not user.enabled
         or not protocol_enabled
+        or (user and user.mail_crypt_key is not None)
     ):
         return flask.jsonify(active=False)
 

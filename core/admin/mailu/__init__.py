@@ -20,6 +20,19 @@ def create_app_from_config(config):
     # Bootstrap is used for error display and flash messages
     app.bootstrap = flask_bootstrap.Bootstrap(app)
 
+    from mailu.mail_crypt import MailCryptError
+    from sqlalchemy.orm.exc import StaleDataError
+
+    @app.errorhandler(MailCryptError)
+    def mail_crypt_error(error):
+        models.db.session.rollback()
+        return str(error), 400, {'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store'}
+
+    @app.errorhandler(StaleDataError)
+    def concurrent_update(error):
+        models.db.session.rollback()
+        return 'Mailbox credentials changed concurrently. Reload and try again.', 409
+
     # Initialize application extensions
     config.init_app(app)
     models.db.init_app(app)

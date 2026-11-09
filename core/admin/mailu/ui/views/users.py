@@ -1,4 +1,4 @@
-from mailu import models, utils, openpgp, announcements, setup_tokens
+from mailu import models, utils, openpgp, announcements, setup_tokens, mail_crypt
 from datetime import date, datetime, timedelta, timezone
 import hashlib
 from markupsafe import escape
@@ -164,6 +164,21 @@ def user_settings(user_email):
     return flask.render_template('user/settings.html', form=form, user=user)
 
 
+@ui.route('/user/encryption', methods=['GET', 'POST'])
+@flask_login.login_required
+def user_encryption():
+    user = models.db.session.get(models.User, flask_login.current_user.email)
+    form = forms.MailCryptForm()
+    if form.validate_on_submit():
+        if utils.is_demo_account(user):
+            flask.abort(403)
+        mail_crypt.enable(user, form.password.data)
+        models.db.session.commit()
+        flask.flash('Future mailbox writes will be encrypted. Enroll your app tokens and export a key backup before migrating existing mail.', 'success')
+        return flask.redirect(flask.url_for('.user_encryption'))
+    return flask.render_template('user/encryption.html', user=user, form=form)
+
+
 def wkd_lookup(key_hash, domain_name=None):
     domain_name = _wkd_domain_from_request(domain_name)
     if len(key_hash) != 32 or any(c not in 'ybndrfg8ejkmcpqxot1uwisza345h769' for c in key_hash):
@@ -207,7 +222,8 @@ def _process_password_change(form, user_email):
                 flask.flash(msg, "error")
                 return flask.render_template('user/password.html', form=form, user=user)
             flask.session.regenerate()
-            user.set_password(form.pw.data, keep_sessions=set(flask.session))
+            user.set_password(form.pw.data, keep_sessions=set(flask.session),
+                              unlock_secret=getattr(form, 'current_pw', None).data if hasattr(form, 'current_pw') else None)
             models.db.session.commit()
             flask.flash('Password updated for %s' % user)
             if user_email:

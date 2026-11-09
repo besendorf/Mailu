@@ -141,7 +141,7 @@ def pw_change():
         if user:
             flask.session.regenerate()
             flask_login.login_user(user)
-            user.set_password(form.pw.data, keep_sessions=set(flask.session))
+            user.set_password(form.pw.data, keep_sessions=set(flask.session), unlock_secret=form.oldpw.data)
             user.change_pw_next_login = False
             models.db.session.commit()
             flask.current_app.logger.info(f'Forced password change by {user} from: {client_ip}/{client_port}: success: password: {form.pwned.data}')

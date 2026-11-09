@@ -78,6 +78,8 @@ def user_authentication():
     """
     if (not flask_login.current_user.is_anonymous
         and flask_login.current_user.enabled):
+        if flask_login.current_user.mail_crypt_key is not None:
+            flask.abort(403, 'This mailbox is encrypted. Use an email client with an enrolled app token; webmail session tokens cannot unlock it.')
         response = flask.Response()
         email = flask_login.current_user.get_id()
         response.headers["X-User"] = models.IdnaEmail.process_bind_param(flask_login, email, "")
