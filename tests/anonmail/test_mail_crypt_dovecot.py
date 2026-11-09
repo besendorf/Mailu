@@ -178,6 +178,29 @@ def test_unencrypted_accounts_are_unchanged(dovecot):
     assert MESSAGE in fetch(run, {}).stdout
 
 
+def test_global_key_mode_is_scoped_per_user_without_folder_keys(dovecot, encrypted_user):
+    from mailu import models
+    run, _home, _config, _prefix = dovecot
+    other = models.User(localpart='bob', domain=encrypted_user.domain)
+    other.set_password('other-password')
+    models.db.session.add(other)
+    models.db.session.commit()
+    mail_crypt.enable(other, 'other-password')
+    models.db.session.commit()
+    alice_public = mail_crypt.public_fields(encrypted_user)
+    bob_public = mail_crypt.public_fields(other)
+    assert alice_public['crypt_global_public_key_file'] != bob_public['crypt_global_public_key_file']
+    assert not any('crypt_user_key' in key for key in alice_public)
+    append(run, alice_public)
+    # Give the reader Bob's valid private key while retaining Alice's mailbox.
+    # Loading a valid key is insufficient: it must match the message recipient.
+    bob_private = private(other, 'other-password')
+    wrong_user = fetch(run, {**alice_public, **bob_private})
+    assert MESSAGE not in wrong_user.stdout
+    assert b'private-body-948277' not in wrong_user.stdout
+    assert MESSAGE in fetch(run, {**alice_public, **private(encrypted_user)}).stdout
+
+
 def test_offline_migration_preserves_uids_flags_and_source(dovecot, encrypted_user, tmp_path):
     run, home, config, prefix = dovecot
     append(run, {})

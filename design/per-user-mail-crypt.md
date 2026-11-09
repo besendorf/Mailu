@@ -5,6 +5,15 @@ migration tool for existing Maildirs. It addresses Mailu/Mailu#1040 using Doveco
 **global-key mode scoped per user through userdb**, rather than per-folder keys.
 See [operator instructions](../docs/mail-crypt.rst) for activation and recovery.
 
+This is the same storage model documented by
+[Userli](https://github.com/systemli/userli/blob/main/docs/operations/mailcrypt.md):
+global-key mode with independently managed per-user keys, public-key delivery,
+and credential-unwrapped private keys supplied at login. "Global" does not mean
+a server-wide shared key. Neither implementation needs Dovecot-generated folder
+keys for this model. The implementations have different envelope formats and EC
+curves; their databases/key envelopes are not interchangeable. Existing Mailu
+key pairs and encrypted messages remain unchanged.
+
 ## Key hierarchy and authentication
 
 Each mailbox has a random P-256 key pair and an immutable UUID. The public key is
