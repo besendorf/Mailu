@@ -165,6 +165,37 @@ def test_enrolled_token_recovers_primary_password_without_old_password(encrypted
     private(user, 'recovered')
 
 
+def test_verifier_upgrade_cannot_overwrite_another_enrollment(encrypted_user, monkeypatch):
+    user = encrypted_user
+    first, second = models.Token(user=user), models.Token(user=user)
+    first.set_password('d' * 32)
+    second.set_password('e' * 32)
+    models.db.session.add_all([first, second])
+    models.db.session.commit()
+    first_id, second_id = first.id, second.id
+    check = first.check_password
+
+    def verify_and_commit(secret):
+        valid = check(secret)
+        # Model the commit/expiration caused by a legacy verifier upgrade,
+        # with another enrollment already committed before it returns.
+        result = envelope.add_credential(
+            mail_crypt.document(user), f'token-{second_id}', 'e' * 32,
+            unlock_id='password', unlock_secret='test-password', mailbox_id=user.mail_crypt_key.mailbox_id,
+        )
+        user.mail_crypt_key.envelope = envelope.dumps(result)
+        models.db.session.commit()
+        return valid
+
+    with monkeypatch.context() as patch:
+        patch.setattr(first, 'check_password', verify_and_commit)
+        mail_crypt.enroll_token(user, first, 'd' * 32, 'test-password')
+        models.db.session.commit()
+    assert {f'token-{first_id}', f'token-{second_id}'}.issubset(mail_crypt.document(user)['slots'])
+    private(user, 'd' * 32)
+    private(user, 'e' * 32)
+
+
 def test_malformed_metadata_fails_closed(client, encrypted_user):
     encrypted_user.mail_crypt_key.envelope = '{}'
     models.db.session.commit()

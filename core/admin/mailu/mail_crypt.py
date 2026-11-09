@@ -66,11 +66,14 @@ def rewrap_password(user, password, unlock_secret, unlock_id='password'):
 
 
 def enroll_token(user, token, raw_token, unlock_secret):
-    result = document(user)
-    if result is None:
+    if user.mail_crypt_key is None:
         return
     if token.user.email != user.email or not token.check_password(raw_token):
         raise MailCryptError('The app token does not belong to this mailbox.')
+    # Legacy token verification may upgrade its verifier and commit/expire ORM
+    # state. Load the envelope afterward so the version counter protects the
+    # same document we modify, including during concurrent enrollment.
+    result = document(user)
     slot = f'token-{token.id}'
     try:
         operation = envelope.replace_credential if slot in result['slots'] else envelope.add_credential

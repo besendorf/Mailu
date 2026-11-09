@@ -165,7 +165,7 @@ def user_settings(user_email):
 
 
 @ui.route('/user/encryption', methods=['GET', 'POST'])
-@flask_login.login_required
+@access.authenticated
 def user_encryption():
     user = models.db.session.get(models.User, flask_login.current_user.email)
     if not user or not user.enabled:
