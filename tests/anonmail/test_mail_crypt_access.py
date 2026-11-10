@@ -45,6 +45,8 @@ def test_oauth_unlock_refresh_replay_and_no_server_reconstruction(app, client, e
     assert prefetched['crypt_global_private_key/mailu/crypt_private_key_file'] == private(encrypted_user)['crypt_global_private_key/mailu/crypt_private_key_file']
     forged = oauth2._derive_mail_token('access', grant.grant_id, 0)
     assert client.post('/internal/oauth2/introspect', data={'token': forged}).json == {'active': False}
+    wrong_seed = oauth2._derive_mail_token('access', grant.grant_id, 0, 'z' * 43)
+    assert client.post('/internal/oauth2/introspect', data={'token': wrong_seed}).json == {'active': False}
     refreshed = client.post('/admin/oauth2/token', data=dict(grant_type='refresh_token', client_id='mailu', refresh_token=tokens['refresh_token']))
     assert refreshed.status_code == 200
     assert client.post('/internal/oauth2/introspect', data={'token': tokens['access_token']}).json == {'active': False}
@@ -99,5 +101,19 @@ def test_recovery_token_rotation_and_password_recovery_preserve_key(app, client,
                                                        'confirm_password': 'replacement-password', 'recover': '1'})
     assert result.status_code == 302
     assert encrypted_user.check_password('replacement-password')
+    assert 'recovery' not in mail_crypt.document(encrypted_user)['slots']
     assert private(encrypted_user, 'replacement-password') == old_pem
     assert models.MailCryptSession.query.count() == 0
+
+
+def test_oauth_prefetch_rejects_stored_control_characters(app, client, encrypted_user, monkeypatch):
+    app.config['WTF_CSRF_ENABLED'] = False
+    tokens = authorize(client, encrypted_user)
+    from mailu.internal.views import dovecot
+    original = dovecot._userdb_fields
+
+    def injected(user):
+        return {**original(user), 'home': '/mail/alice\tuid=0'}
+
+    monkeypatch.setattr(dovecot, '_userdb_fields', injected)
+    assert client.post('/internal/oauth2/introspect', data={'token': tokens['access_token']}).json == {'active': False}

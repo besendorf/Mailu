@@ -88,7 +88,7 @@ def enroll_token(user, token, raw_token, unlock_secret):
         result = operation(result, slot, raw_token, unlock_id='password',
                            unlock_secret=unlock_secret, mailbox_id=user.mail_crypt_key.mailbox_id)
     except envelope.KeyringError:
-        raise MailCryptError('Could not enroll the app token. Check the mailbox password and the 15-token limit.') from None
+        raise MailCryptError('Could not enroll the app token. Check the mailbox password and available credential slots.') from None
     user.mail_crypt_key.envelope = envelope.dumps(result)
 
 
