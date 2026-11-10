@@ -1,8 +1,9 @@
 """OAuth 2.0 authorization server for native mail clients.
 
 Mailu issues opaque, short-lived access tokens and rotating refresh tokens.
-Authorization codes are stored as hashes. Mail tokens are derived from a
-server key and a grant generation, so only grant state is stored.
+Authorization codes are stored as hashes. Legacy tokens are derived from a
+server key and grant generation. Encrypted grants additionally require a random
+client-held secret; the database stores only a credential-encrypted mailbox key.
 """
 
 import base64

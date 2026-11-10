@@ -41,7 +41,8 @@ def test_oauth_unlock_refresh_replay_and_no_server_reconstruction(app, client, e
                            headers={'X-Dovecot-Auth-Protocol': 'imap'})
     assert response.json['active'] is True
     assert response.headers['Cache-Control'] == 'no-store'
-    assert response.json['mail_crypt_private_key'] == private(encrypted_user)['crypt_global_private_key/mailu/crypt_private_key_file']
+    prefetched = dict(field.split('=', 1) for field in response.json['mail_crypt_userdb'].split('\t'))
+    assert prefetched['crypt_global_private_key/mailu/crypt_private_key_file'] == private(encrypted_user)['crypt_global_private_key/mailu/crypt_private_key_file']
     forged = oauth2._derive_mail_token('access', grant.grant_id, 0)
     assert client.post('/internal/oauth2/introspect', data={'token': forged}).json == {'active': False}
     refreshed = client.post('/admin/oauth2/token', data=dict(grant_type='refresh_token', client_id='mailu', refresh_token=tokens['refresh_token']))

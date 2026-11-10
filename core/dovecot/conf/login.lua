@@ -82,15 +82,7 @@ function auth_userdb_lookup(req)
 
     if resp_status == 200
     then
-        local fields = json.decode(auth_response:payload())
-        -- OAuth private key comes only from successful bearer introspection.
-        -- Ordinary userdb/LMTP lookups have no passdb field and remain locked.
-        local key = req:var_expand("%{passdb:mail_crypt_private_key | default('')}")
-        if key ~= nil and key ~= "" and fields.crypt_global_public_key_file ~= nil then
-            fields.crypt_global_private_key = "mailu"
-            fields["crypt_global_private_key/mailu/crypt_private_key_file"] = key
-        end
-        return dovecot.auth.USERDB_RESULT_OK, fields
+        return dovecot.auth.USERDB_RESULT_OK, json.decode(auth_response:payload())
     elseif resp_status == 404 then
         return dovecot.auth.USERDB_RESULT_USER_UNKNOWN, ""
     else

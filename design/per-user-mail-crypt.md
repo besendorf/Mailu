@@ -50,8 +50,8 @@ After PKCE verification, token exchange rewraps it under a fresh random secret
 carried in signed v2 access/refresh tokens, never stored unencrypted by admin.
 Refresh preserves this secret and rotates the generation. The server signing key
 and database alone cannot reconstruct a bearer token or unlock its envelope.
-Successful introspection supplies a private passdb field; Lua combines it with
-public userdb settings. Plaintext accounts and LMTP retain their existing paths.
+Successful introspection supplies complete userdb prefetch fields through
+Dovecot’s tab-separated userdb_import format. Plaintext accounts and LMTP retain their existing paths.
 
 An independent, user-held recovery token occupies a normal credential slot.
 Replacement invalidates the previous slot, and successful recovery consumes it.

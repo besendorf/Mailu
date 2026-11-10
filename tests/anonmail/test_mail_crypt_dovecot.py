@@ -303,6 +303,7 @@ default_internal_group = {unix_group}
 default_login_user = {unix_user}
 postmaster_address = postmaster@example.org
 passdb lua {{
+ mechanisms_filter = plain login
  lua_file = {login_path}
  use_worker = yes
 }}

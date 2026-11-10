@@ -49,7 +49,8 @@ def oauth2_introspect():
     ):
         return flask.jsonify(active=False)
 
-    key_fields = {'mail_crypt_private_key': ''}
+    from mailu.internal.views.dovecot import _userdb_fields
+    fields = _userdb_fields(user)
     if user.mail_crypt_key:
         if not raw_token.startswith('v2.') or not grant.mail_crypt_envelope:
             return flask.jsonify(active=False)
@@ -57,7 +58,12 @@ def oauth2_introspect():
             pem = mail_crypt.unwrap(user, grant.mail_crypt_envelope, raw_token.split('.')[4])
         except mail_crypt.MailCryptError:
             return flask.jsonify(active=False)
-        key_fields['mail_crypt_private_key'] = mail_crypt._inline(pem)
+        fields.update(mail_crypt.private_key_fields(pem))
+    # userdb_import is Dovecot's supported variable-field prefetch format. Fail
+    # closed if a stored account value could inject another tab-separated field.
+    if any(any(char in str(value) for char in '\t\r\n\0') for value in fields.values()):
+        return flask.jsonify(active=False)
+    key_fields = {'mail_crypt_userdb': '\t'.join(f'{key}={value}' for key, value in fields.items())}
     response = flask.jsonify({
         **key_fields,
         'active': True,
