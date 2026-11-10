@@ -1,8 +1,9 @@
 """OAuth 2.0 authorization server for native mail clients.
 
 Mailu issues opaque, short-lived access tokens and rotating refresh tokens.
-Authorization codes are stored as hashes. Mail tokens are derived from a
-server key and a grant generation, so only grant state is stored.
+Authorization codes are stored as hashes. Legacy tokens are derived from a
+server key and grant generation. Encrypted grants additionally require a random
+client-held secret; the database stores only a credential-encrypted mailbox key.
 """
 
 import base64
@@ -21,10 +22,10 @@ from flask import current_app as app
 from flask_babel import lazy_gettext as _
 from sqlalchemy import and_, or_
 from sqlalchemy.exc import IntegrityError
-from wtforms import HiddenField, SelectMultipleField, SubmitField
+from wtforms import PasswordField, HiddenField, SelectMultipleField, SubmitField
 from wtforms.widgets import CheckboxInput
 
-from mailu import models, signin
+from mailu import models, signin, mail_crypt, mail_crypt_envelope
 
 
 CLIENT_ID = 'mailu'
@@ -55,6 +56,7 @@ oauth2 = flask.Blueprint('oauth2', __name__)
 
 
 class AuthorizationForm(flask_wtf.FlaskForm):
+    mailbox_password = PasswordField(_('Mailbox encryption password'))
     request_id = HiddenField()
     selected_scopes = SelectMultipleField(option_widget=CheckboxInput())
     approve = SubmitField(_('Allow access'))
@@ -143,26 +145,36 @@ def _oauth2_signing_key():
     return key
 
 
-def _derive_mail_token(kind, grant_id, generation):
+def _derive_mail_token(kind, grant_id, generation, unlock_secret=None):
     key = hmac.digest(_oauth2_signing_key(), b'MAILU_OAUTH2_TOKEN_KEY', 'sha256')
-    payload = f'v1.{kind}.{grant_id}.{generation}'
+    payload = (f'v2.{kind}.{grant_id}.{generation}.{unlock_secret}' if unlock_secret
+               else f'v1.{kind}.{grant_id}.{generation}')
     mac = hmac.new(key, payload.encode('ascii'), hashlib.sha256).hexdigest()
     return f'{payload}.{mac}'
 
 
 def _parse_mail_token(token, expected_kind=None):
     try:
-        version, kind, grant_id, raw_generation, supplied_mac = token.split('.')
+        parts = token.split('.')
+        if len(parts) == 6 and parts[0] == 'v2':
+            version, kind, grant_id, raw_generation, unlock_secret, supplied_mac = parts
+            if not re.fullmatch(r'[A-Za-z0-9_-]{43}', unlock_secret):
+                return None
+        elif len(parts) == 5 and parts[0] == 'v1':
+            version, kind, grant_id, raw_generation, supplied_mac = parts
+            unlock_secret = None
+        else:
+            return None
         generation = int(raw_generation)
         if (
-            version != 'v1' or kind not in ('access', 'refresh')
+            version not in ('v1', 'v2') or kind not in ('access', 'refresh')
             or not re.fullmatch(r'[A-Za-z0-9_-]{22}', grant_id)
             or generation < 0
         ):
             return None
         if expected_kind and kind != expected_kind:
             return None
-        expected = _derive_mail_token(kind, grant_id, generation).rsplit('.', 1)[1]
+        expected = _derive_mail_token(kind, grant_id, generation, unlock_secret).rsplit('.', 1)[1]
         if not hmac.compare_digest(supplied_mac, expected):
             return None
         return kind, grant_id, generation
@@ -357,8 +369,16 @@ def authorize():
             })
 
         raw_code = secrets.token_urlsafe(32)
+        wrapped = None
+        if user.mail_crypt_key:
+            try:
+                wrapped = mail_crypt.wrap(user, raw_code, unlock_secret=form.mailbox_password.data)
+            except mail_crypt.MailCryptError:
+                form.mailbox_password.errors = ['The mailbox password is required to authorize encrypted mail access.']
+                return flask.render_template('oauth2/authorize.html', form=form, scope_tooltips=SCOPE_TOOLTIPS), 400
         cleanup_expired_records()
         models.db.session.add(models.OAuth2AuthorizationCode(
+            mail_crypt_envelope=wrapped,
             code_hash=_authorization_code_hash(raw_code),
             user=user,
             client_id=request_data['client_id'],
@@ -386,7 +406,7 @@ def authorize():
     )
 
 
-def _issue_tokens(user_email, client_id, scope, grant=None):
+def _issue_tokens(user_email, client_id, scope, grant=None, unlock_secret=None, wrapped=None):
     now = int(time.time())
     has_offline_access = 'offline_access' in scope.split()
     is_refresh = grant is not None
@@ -409,9 +429,11 @@ def _issue_tokens(user_email, client_id, scope, grant=None):
     else:
         grant.client_name = _client_name()
         grant.last_refresh_at = now
-    access_token = _derive_mail_token('access', grant.grant_id, grant.token_generation)
+    if wrapped is not None:
+        grant.mail_crypt_envelope = wrapped
+    access_token = _derive_mail_token('access', grant.grant_id, grant.token_generation, unlock_secret)
     refresh_token = (
-        _derive_mail_token('refresh', grant.grant_id, grant.token_generation)
+        _derive_mail_token('refresh', grant.grant_id, grant.token_generation, unlock_secret)
         if has_offline_access else None
     )
     grant.scope = scope
@@ -526,7 +548,18 @@ def token():
             return _oauth_error('invalid_grant')
         models.db.session.delete(record)
         try:
-            response = _issue_tokens(user.email, CLIENT_ID, record.scope)
+            wrapped = None
+            unlock_secret = None
+            if user.mail_crypt_key:
+                if not record.mail_crypt_envelope:
+                    models.db.session.rollback()
+                    return _oauth_error('invalid_grant', 'Authorize again to unlock encrypted mail.')
+                unlock_secret = secrets.token_urlsafe(32)
+                wrapped = mail_crypt.wrap(user, unlock_secret,
+                    source=mail_crypt_envelope.loads(record.mail_crypt_envelope.encode()),
+                    unlock_id='credential', unlock_secret=raw_code)
+            response = _issue_tokens(user.email, CLIENT_ID, record.scope,
+                                     unlock_secret=unlock_secret, wrapped=wrapped)
         except Exception:
             models.db.session.rollback()
             raise
@@ -622,8 +655,18 @@ def token():
             models.db.session.delete(grant)
             models.db.session.commit()
             return _oauth_error('invalid_grant')
+        unlock_secret = None
+        if user.mail_crypt_key:
+            if not raw_refresh.startswith('v2.') or not grant.mail_crypt_envelope:
+                return _oauth_error('invalid_grant', 'Authorize again to unlock encrypted mail.')
+            unlock_secret = raw_refresh.split('.')[4]
+            try:
+                mail_crypt.unwrap(user, grant.mail_crypt_envelope, unlock_secret)
+            except mail_crypt.MailCryptError:
+                return _oauth_error('invalid_grant')
         grant.token_generation += 1
-        response = _issue_tokens(user.email, CLIENT_ID, grant.scope, grant=grant)
+        response = _issue_tokens(user.email, CLIENT_ID, grant.scope, grant=grant,
+                                 unlock_secret=unlock_secret)
         return _token_response(response)
 
     return _oauth_error('unsupported_grant_type')

@@ -66,6 +66,16 @@ if not os.path.ismount(runtime_root):
     raise RuntimeError(
         f"{runtime_root} must be mounted as tmpfs by the Compose configuration"
     )
+with open('/proc/self/mountinfo', encoding='utf-8') as mountinfo:
+    runtime_is_tmpfs = any(
+        len(left.split()) > 4 and left.split()[4] == runtime_root
+        and right.split()[0] == 'tmpfs'
+        for line in mountinfo
+        for left, separator, right in [line.partition(' - ')]
+        if separator and right.split()
+    )
+if not runtime_is_tmpfs:
+    raise RuntimeError(f'{runtime_root} must be tmpfs; persistent temporary storage could expose decrypted mail')
 os.chown(runtime_root, 0, 0)
 os.chmod(runtime_root, 0o755)
 for runtime_name in (
@@ -78,6 +88,15 @@ for runtime_name in (
     os.makedirs(runtime_path, mode=0o755, exist_ok=True)
     os.chown(runtime_path, 0, 0)
     os.chmod(runtime_path, 0o755)
+
+# Decryption/compression may spill seekable streams into temporary files.
+# Keep those files in the existing tmpfs, outside persistent mailbox storage.
+# Mail workers use distinct UIDs; sticky mode and safe_mkstemp's 0600/O_EXCL
+# files provide the same isolation as a conventional /tmp directory.
+crypt_temp = os.path.join(runtime_root, 'run/mailu-crypt-tmp')
+os.makedirs(crypt_temp, mode=0o1777, exist_ok=True)
+os.chown(crypt_temp, 0, 0)
+os.chmod(crypt_temp, 0o1777)
 
 runtime_private_dir = os.path.join(runtime_root, "run/podop")
 os.makedirs(runtime_private_dir, mode=0o710, exist_ok=True)

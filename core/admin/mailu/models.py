@@ -827,8 +827,8 @@ class User(Base, Email):
             reference = reference.split('}', 1)[1]
 
         result, new_hash = User.get_password_context().verify_and_update(password, reference)
-        if new_hash:
-            self.password = new_hash
+        if result and new_hash:
+            self._assign_verified_password_hash(new_hash)
             db.session.add(self)
             db.session.commit()
 
@@ -844,18 +844,41 @@ in clear-text regardless of the presence of the cache.
             self._credential_cache[self.get_id()] = (self.password.split('$')[3], passlib.hash.pbkdf2_sha256.using(rounds=1).hash(password))
         return result
 
-    def set_password(self, password, raw=False, keep_sessions=None):
+    def set_password(self, password, raw=False, keep_sessions=None, unlock_secret=None, unlock_id='password'):
         """ Set password for user and destroy all web sessions except those in keep_sessions
             @password: plain text password to encrypt (or, if raw is True: the hash itself)
             @keep_sessions: True if all the sessions should be preserved, otherwise a
 set() containing the sessions to keep
         """
-        self.password = password if raw else User.get_password_context().hash(password)
+        if self.mail_crypt_key is not None:
+            from mailu import mail_crypt
+            if raw:
+                raise mail_crypt.MailCryptError('Cannot import a password hash for an encrypted mailbox; use a plaintext password and an existing unlock credential.')
+            mail_crypt.rewrap_password(self, password, unlock_secret, unlock_id)
+            mail_crypt.revoke_webmail(self)
+        self._assign_verified_password_hash(password if raw else User.get_password_context().hash(password))
         if sqlalchemy.inspect(self).persistent:
             from mailu.oauth2 import force_user_reauthentication
             force_user_reauthentication(self, 'password changed')
         if keep_sessions is not True and self.email is not None:
             utils.MailuSessionExtension.prune_sessions(uid=self.email, keep=keep_sessions)
+
+    def _assign_verified_password_hash(self, value):
+        self._mail_crypt_password_update = True
+        try:
+            self.password = value
+        finally:
+            self._mail_crypt_password_update = False
+
+    @validates('password')
+    def _guard_encrypted_password(self, key, value):
+        # Marshmallow config import can assign password hashes directly. Route
+        # every credential change through set_password, including those paths.
+        if (self.mail_crypt_key is not None and value != self.password
+                and not getattr(self, '_mail_crypt_password_update', False)):
+            from mailu.mail_crypt import MailCryptError
+            raise MailCryptError('Password import/reset requires an existing mailbox unlock credential. Use mail-crypt change-password.')
+        return value
 
     def get_managed_domains(self):
         """ return list of domains this user can manage """
@@ -1080,6 +1103,34 @@ def update_wkd_keys(user, uid_keys):
         ))
 
 
+class MailCryptKey(db.Model):
+    """Persistent public key and credential envelopes; no plaintext private key."""
+
+    __tablename__ = 'mail_crypt_key'
+    metadata = Base.metadata
+    user_email = db.Column(db.String(255), db.ForeignKey(User.email), primary_key=True)
+    user = db.relationship(User, backref=db.backref(
+        'mail_crypt_key', uselist=False, cascade='all, delete-orphan'))
+    mailbox_id = db.Column(db.String(36), unique=True, nullable=False)
+    envelope = db.Column(db.Text, nullable=False)
+    version = db.Column(db.Integer, nullable=False, default=1)
+    __mapper_args__ = {'version_id_col': version}
+
+
+class MailCryptSession(db.Model):
+    """Webmail bearer credentials: only hashes and encrypted key material."""
+
+    __tablename__ = 'mail_crypt_session'
+    __table_args__ = (db.Index('ix_mail_crypt_session_expires_at', 'expires_at'),)
+    metadata = Base.metadata
+    token_hash = db.Column(db.String(64), primary_key=True)
+    user_email = db.Column(db.String(255), db.ForeignKey(User.email), nullable=False)
+    user = db.relationship(User, backref=db.backref('mail_crypt_sessions', cascade='all, delete-orphan'))
+    session_hash = db.Column(db.String(64), nullable=False)
+    expires_at = db.Column(db.Integer, nullable=False)
+    envelope = db.Column(db.Text, nullable=False)
+
+
 class Token(Base):
     """ A token is an application password for a given user.
     """
@@ -1122,6 +1173,7 @@ class OAuth2AuthorizationCode(Base):
     __tablename__ = 'oauth2_authorization_code'
 
     code_hash = db.Column(db.String(64), primary_key=True)
+    mail_crypt_envelope = db.Column(db.Text, nullable=True)
     user_email = db.Column(db.String(255), db.ForeignKey(User.email, ondelete='CASCADE'), nullable=False, index=True)
     user = db.relationship(User, backref=db.backref('oauth2_authorization_codes', cascade='all, delete-orphan'))
     client_id = db.Column(db.String(80), nullable=False)
@@ -1145,6 +1197,7 @@ class OAuth2Grant(Base):
     )
     client_id = db.Column(db.String(80), nullable=False)
     token_generation = db.Column(db.Integer, nullable=False, default=0)
+    mail_crypt_envelope = db.Column(db.Text, nullable=True)
     scope = db.Column(db.String(255), nullable=False)
     access_expires_at = db.Column(db.Integer, nullable=False, index=True)
     refresh_expires_at = db.Column(db.Integer, nullable=True, index=True)

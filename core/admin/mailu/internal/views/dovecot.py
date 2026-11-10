@@ -1,4 +1,4 @@
-from mailu import models
+from mailu import models, mail_crypt
 from mailu.internal import internal
 from flask import current_app as app
 from socrate.system import mailbox_shard
@@ -6,6 +6,7 @@ from socrate.system import mailbox_shard
 import flask
 import socket
 import os
+import urllib.parse
 import sqlalchemy.exc
 
 def _get_user_or_404(user_email):
@@ -26,18 +27,36 @@ def dovecot_passdb_dict(user_email):
         found = None
     if found is None:
         flask.abort(404)
+    user = models.db.session.get(models.User, user_email)
+    prefetched = {}
+    if user.mail_crypt_key is not None:
+        headers = flask.request.headers
+        try:
+            private = mail_crypt.private_fields(
+                user, urllib.parse.unquote(headers.get('Auth-Pass', '')),
+                urllib.parse.unquote(headers.get('Client-Ip', '')),
+                headers.get('Auth-Protocol'), headers.get('Auth-Port'),
+            )
+            prefetched = _userdb_fields(user)
+            prefetched.update(private)
+        except mail_crypt.MailCryptError:
+            # Do not put credentials, private keys, or keyring JSON in logs.
+            flask.abort(403)
     allow_nets = []
     allow_nets.append(app.config["SUBNET"])
     if app.config["SUBNET6"]:
         allow_nets.append(app.config["SUBNET6"])
-    return flask.jsonify({
+    response = flask.jsonify({
         # Dovecot's nopassword passdb requires an empty password value. JSON
         # null is decoded as an absent field and does not authenticate the
         # trusted proxy connection on current Dovecot releases.
         "password": "",
         "nopassword": "Y",
-        "allow_real_nets": ",".join(allow_nets)
+        "allow_real_nets": ",".join(allow_nets),
+        **{f'userdb_{key}': value for key, value in prefetched.items()},
     })
+    response.headers['Cache-Control'] = 'no-store'
+    return response
 
 @internal.route("/dovecot/userdb/")
 def dovecot_userdb_dict_list():
@@ -56,10 +75,7 @@ def dovecot_userdb_dict_list():
 @internal.route("/dovecot/userdb/<path:user_email>")
 def dovecot_userdb_dict(user_email):
     try:
-        user = models.User.query.with_entities(
-            models.User.email, models.User.domain_name, models.User.localpart,
-            models.User.quota_bytes, models.User.dovecot_uid,
-        ).filter_by(_email=user_email).first()
+        user = models.User.query.filter_by(_email=user_email).first()
     except sqlalchemy.exc.StatementError:
         user = None
     if user is None:
@@ -74,13 +90,18 @@ def _userdb_fields(user):
     # The /./ separator tells Dovecot to chroot at /mail and use the remainder
     # as the user's home inside that jail.
     mailbox_home = f"/mail/./{user.domain_name}/{mailbox_shard(user.email)}/{user.localpart}"
-    return {
+    result = {
         "email": user.email,
         "quota_storage_size": str(user.quota_bytes),
         "uid": user.dovecot_uid,
         "gid": user.dovecot_uid,
         "home": mailbox_home,
     }
+    # Iteration callers may select only mailbox columns. Resolve the key row
+    # through the owning user, without ever unlocking it.
+    account = user if isinstance(user, models.User) else models.db.session.get(models.User, user.email)
+    result.update(mail_crypt.public_fields(account))
+    return result
 
 
 @internal.route("/dovecot/quota/<ns>/<path:user_email>", methods=["POST"])

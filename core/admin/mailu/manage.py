@@ -77,6 +77,174 @@ def cleanup_oauth2():
     )
 
 
+@mailu.group('mail-crypt')
+def mail_crypt_commands():
+    """Provision and recover per-mailbox encryption (password/app-token access)."""
+
+
+def _crypt_user(username):
+    account = models.db.session.get(models.User, _user_email(username))
+    if account is None:
+        raise click.ClickException('Mailbox does not exist.')
+    return account
+
+
+@mail_crypt_commands.command('enable')
+@click.argument('username')
+@click.option('--acknowledge-limitations', is_flag=True, required=True,
+              help='Acknowledge that old mail stays plaintext, webmail/OAuth access is disabled, and lost credentials cannot be reset.')
+@with_appcontext
+def mail_crypt_enable(username, acknowledge_limitations):
+    """Encrypt future writes; migrate old mail separately while offline."""
+    from mailu import mail_crypt
+    if not acknowledge_limitations:
+        raise click.UsageError('Pass --acknowledge-limitations after reviewing mailbox encryption activation and backup requirements.')
+    try:
+        account = _crypt_user(username)
+        password = click.prompt('Current mailbox password', hide_input=True)
+        mail_crypt.enable(account, password)
+        db.session.commit()
+    except mail_crypt.MailCryptError as error:
+        db.session.rollback()
+        raise click.ClickException(str(error)) from None
+    click.echo('Encryption enabled for future writes. Export the key envelope, enroll app tokens, and migrate old mail before claiming full encryption at rest.')
+
+
+@mail_crypt_commands.command('enroll-token')
+@click.argument('username')
+@click.argument('token_id', type=int)
+@with_appcontext
+def mail_crypt_enroll_token(username, token_id):
+    """Enroll an existing app token without displaying it."""
+    from mailu import mail_crypt
+    account = _crypt_user(username)
+    token = models.db.session.get(models.Token, token_id)
+    if token is None or token.user.email != account.email:
+        raise click.ClickException('App token does not belong to this mailbox.')
+    if account.mail_crypt_key is None:
+        raise click.ClickException('Mailbox encryption is not enabled.')
+    secret = click.prompt('Mailbox encryption password', hide_input=True)
+    raw_token = click.prompt('Existing app token', hide_input=True)
+    try:
+        mail_crypt.enroll_token(account, token, raw_token, secret)
+        db.session.commit()
+    except mail_crypt.MailCryptError as error:
+        db.session.rollback()
+        raise click.ClickException(str(error)) from None
+    click.echo('App token enrolled.')
+
+
+@mail_crypt_commands.command('change-password')
+@click.argument('username')
+@click.option('--unlock-id', default='password', show_default=True,
+              help='Use recovery for a recovery token, or token-N for an enrolled app token.')
+@with_appcontext
+def mail_crypt_change_password(username, unlock_id):
+    """Change password and rewrap the existing mailbox key atomically."""
+    from mailu import mail_crypt
+    account = _crypt_user(username)
+    secret = click.prompt('Existing mailbox unlock credential', hide_input=True)
+    password = click.prompt('New mailbox password', hide_input=True, confirmation_prompt=True)
+    try:
+        account.set_password(password, unlock_secret=secret, unlock_id=unlock_id)
+        db.session.commit()
+    except mail_crypt.MailCryptError as error:
+        db.session.rollback()
+        raise click.ClickException(str(error)) from None
+    click.echo('Password changed; the mailbox key is unchanged. Disconnect old mail sessions separately.')
+
+
+@mail_crypt_commands.command('recovery-token')
+@click.argument('username')
+@with_appcontext
+def mail_crypt_recovery_token(username):
+    """Generate and display a new user-held recovery token once."""
+    from mailu import mail_crypt
+    account = _crypt_user(username)
+    if account.mail_crypt_key is None:
+        raise click.ClickException('Mailbox encryption is not enabled.')
+    password = click.prompt('Mailbox encryption password', hide_input=True)
+    try:
+        secret = mail_crypt.recovery_token(account, password)
+        db.session.commit()
+    except mail_crypt.MailCryptError as error:
+        db.session.rollback()
+        raise click.ClickException(str(error)) from None
+    click.echo('Save this recovery token offline; any previous recovery token is replaced:')
+    click.echo(secret)
+
+
+@mail_crypt_commands.command('export')
+@click.argument('username')
+@with_appcontext
+def mail_crypt_export(username):
+    """Export encrypted key envelopes to stdout for an offline backup."""
+    from mailu import mail_crypt
+    account = _crypt_user(username)
+    if account.mail_crypt_key is None:
+        raise click.ClickException('Mailbox encryption is not enabled.')
+    mail_crypt.document(account)  # Validate before exporting.
+    click.echo(account.mail_crypt_key.envelope, nl=False)
+
+
+@mail_crypt_commands.command('public-key')
+@click.argument('username')
+@with_appcontext
+def mail_crypt_public_key(username):
+    """Export the mailbox public PEM key for offline migration."""
+    from mailu import mail_crypt
+    from mailu.mail_crypt_envelope import public_pem
+    result = mail_crypt.document(_crypt_user(username))
+    if result is None:
+        raise click.ClickException('Mailbox encryption is not enabled.')
+    click.echo(public_pem(result).decode('ascii'), nl=False)
+
+
+@mail_crypt_commands.command('restore')
+@click.argument('username')
+@click.argument('backup', type=click.File('rb'))
+@click.option('--mailbox-id', required=True, help='Trusted mailbox UUID from the original key backup inventory.')
+@click.option('--unlock-id', default='password', show_default=True)
+@with_appcontext
+def mail_crypt_restore(username, backup, mailbox_id, unlock_id):
+    """Restore original key envelopes; never generate a replacement mailbox key."""
+    from mailu import mail_crypt, mail_crypt_envelope as envelope
+    account = _crypt_user(username)
+    try:
+        restored = envelope.loads(backup.read(envelope.MAX_DOCUMENT_BYTES + 1))
+        secret = click.prompt('Backup unlock credential', hide_input=True)
+        envelope.unlock(restored, unlock_id, secret, mailbox_id=mailbox_id)
+        record = account.mail_crypt_key
+        if record is not None and record.mailbox_id != mailbox_id:
+            raise mail_crypt.MailCryptError('Backup belongs to a different mailbox identity.')
+        if record is None:
+            record = models.MailCryptKey(user=account, mailbox_id=mailbox_id)
+            db.session.add(record)
+        record.envelope = envelope.dumps(restored)
+        db.session.commit()
+    except (mail_crypt.MailCryptError, envelope.KeyringError) as error:
+        db.session.rollback()
+        raise click.ClickException(str(error)) from None
+    click.echo('Original key envelopes restored. Authentication credentials are unchanged; use change-password if the backup needs rewrapping.')
+
+
+@mail_crypt_commands.command('status')
+@click.argument('username')
+@with_appcontext
+def mail_crypt_status(username):
+    """Show the mailbox home, encryption identity and enrolled token IDs."""
+    from mailu import mail_crypt
+    from socrate.system import mailbox_shard
+    account = _crypt_user(username)
+    click.echo(f'Mailbox home: /mail/{account.domain_name}/{mailbox_shard(account.email)}/{account.localpart}')
+    result = mail_crypt.document(account)
+    if result is None:
+        click.echo('Mailbox encryption: disabled')
+    else:
+        click.echo(f'Mailbox encryption identity: {result["mailbox_id"]}')
+        click.echo('Enrolled credential IDs: ' + ', '.join(sorted(result['slots'])))
+
+
 def _user_email(username):
     if '@' in username:
         return username

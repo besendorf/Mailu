@@ -63,8 +63,12 @@ function auth_passdb_lookup(req)
     if resp_status == 200
     then
         return dovecot.auth.PASSDB_RESULT_OK, json.decode(auth_response:payload())
-    else
+    elseif resp_status == 403 then
+        return dovecot.auth.PASSDB_RESULT_PASSWORD_MISMATCH, ""
+    elseif resp_status == 404 then
         return dovecot.auth.PASSDB_RESULT_USER_UNKNOWN, ""
+    else
+        return dovecot.auth.PASSDB_RESULT_INTERNAL_FAILURE, ""
     end
 end
 
@@ -79,8 +83,12 @@ function auth_userdb_lookup(req)
     if resp_status == 200
     then
         return dovecot.auth.USERDB_RESULT_OK, json.decode(auth_response:payload())
-    else
+    elseif resp_status == 404 then
         return dovecot.auth.USERDB_RESULT_USER_UNKNOWN, ""
+    else
+        -- Missing/corrupt key metadata is a temporary delivery failure, never
+        -- an unknown recipient (which could bounce incoming mail).
+        return dovecot.auth.USERDB_RESULT_INTERNAL_FAILURE, ""
     end
 end
 

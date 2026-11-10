@@ -1,0 +1,2 @@
+# Argon2id support was added in cryptography 44.
+cryptography>=44

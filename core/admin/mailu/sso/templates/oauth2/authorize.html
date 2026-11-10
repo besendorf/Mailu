@@ -22,6 +22,13 @@
     {% endif %}
   </fieldset>
   <p class="text-body-secondary">{% trans %}Offline access lets the app refresh its access token without asking you to sign in again. If you turn it off, you will need to authorize the app again after the access token expires.{% endtrans %}</p>
+  {% if current_user.mail_crypt_key %}
+  <div class="mb-3">
+    {{ form.mailbox_password.label(class_='form-label') }}
+    {{ form.mailbox_password(class_='form-control', autocomplete='current-password') }}
+    {% for error in form.mailbox_password.errors %}<p class="text-danger">{{ error }}</p>{% endfor %}
+  </div>
+  {% endif %}
   <div class="d-flex gap-2">
     {{ form.approve(class_='btn btn-primary') }}
     {{ form.deny(class_='btn btn-outline-secondary') }}

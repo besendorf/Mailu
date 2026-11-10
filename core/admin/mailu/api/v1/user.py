@@ -74,6 +74,7 @@ user_fields_post = api.model('UserCreate', {
 })
 
 user_fields_put = api.model('UserUpdate', {
+    'mailbox_unlock_password': fields.String(description='Existing unlock password required when changing an encrypted mailbox password; never returned'),
     'raw_password': fields.String(description='The raw (plain text) password of the user. Mailu will hash the password using BCRYPT-SHA256', example='secret'),
     'comment': fields.String(description='A description for the user. This description is shown on the Users page', example='my comment'),
     'quota_bytes': fields.Integer(description='The maximum quota for the user’s email box in bytes', example='1000000000'),
@@ -244,7 +245,7 @@ class User(Resource):
                 return { 'code': 400, 'message': f'forward_destination is mandatory when forward_enabled is true'}, 400
 
         if 'raw_password' in data:
-            user_found.set_password(data['raw_password'])
+            user_found.set_password(data['raw_password'], unlock_secret=data.get('mailbox_unlock_password'))
         if 'comment' in data:
             user_found.comment = data['comment']
         if 'quota_bytes' in data:

@@ -49,6 +49,11 @@ def fetch_users():
 
 
 def normalize_message(path):
+    with open(path, 'rb') as message:
+        if message.read(8) == b'CRYPTED\x03\x07':
+            # S/W describe the decrypted message. Ciphertext byte/line counts
+            # cannot replace those values without a private key.
+            return
     physical = line_feeds = carriage_returns = crlf_pairs = 0
     previous_cr = False
     with open(path, "rb") as message:

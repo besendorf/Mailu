@@ -9,6 +9,9 @@ from mailu import models
 
 def issue(user, lifetime):
     """Replace any outstanding setup link and return its raw token and expiry."""
+    if user.mail_crypt_key is not None:
+        from mailu.mail_crypt import MailCryptError
+        raise MailCryptError('A setup link cannot recover encrypted mail. Use mail-crypt change-password with an existing unlock credential.')
     raw_token = secrets.token_urlsafe(32)
     expires_at = datetime.now(timezone.utc) + timedelta(seconds=lifetime)
     token_hash = hashlib.sha256(raw_token.encode()).hexdigest()

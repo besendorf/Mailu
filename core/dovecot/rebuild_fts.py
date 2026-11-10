@@ -101,6 +101,15 @@ if os.path.exists(MARKER) or os.path.exists(INDEX_MARKER):
     work_users = [user for user in mailbox_users if user["email"] in work]
     for index, user in enumerate(work_users, start=1):
         email = user["email"]
+        if user.get('crypt_write_algorithm'):
+            print(f"Skipping locked encrypted mailbox {email}; indexes require an authenticated unlock.", flush=True)
+            fts_queue.discard(email)
+            index_queue.discard(email)
+            if pending_fts:
+                write_mailbox_queue(MARKER, fts_queue)
+            if pending_indexes:
+                write_mailbox_queue(INDEX_MARKER, index_queue)
+            continue
         print(f"Indexing mailbox {index}/{len(work_users)}: {email}", flush=True)
         if email in fts_queue:
             print(f"Removing stale full-text index for {email}.", flush=True)

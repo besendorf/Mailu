@@ -300,7 +300,24 @@ class UserReplyForm(flask_wtf.FlaskForm):
         return valid
 
 
+class MailCryptAccessForm(flask_wtf.FlaskForm):
+    action = fields.HiddenField()
+    password = fields.PasswordField(_('Mailbox password or recovery token'), [validators.DataRequired()])
+    new_password = fields.PasswordField(_('New mailbox password'), [validators.Optional(), validators.Length(min=8)])
+    confirm_password = fields.PasswordField(_('Repeat new password'), [validators.EqualTo('new_password')])
+    unlock = fields.SubmitField(_('Unlock webmail for one hour'))
+    recovery = fields.SubmitField(_('Generate a new recovery token'))
+    recover = fields.SubmitField(_('Recover using recovery token'))
+
+
+class MailCryptForm(flask_wtf.FlaskForm):
+    password = fields.PasswordField(_('Current mailbox password'), [validators.DataRequired()])
+    acknowledge = fields.BooleanField(_('I understand the limitations and have a backup'), [validators.DataRequired()])
+    submit = fields.SubmitField(_('Enable encryption for future mail'))
+
+
 class TokenForm(flask_wtf.FlaskForm):
+    mailbox_password = fields.PasswordField(_('Mailbox encryption password'), [validators.Optional()])
     displayed_password = fields.StringField(
         _('Authentication token (shown once)')
     )

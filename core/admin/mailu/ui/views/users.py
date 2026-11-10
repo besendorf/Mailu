@@ -1,4 +1,4 @@
-from mailu import models, utils, openpgp, announcements, setup_tokens
+from mailu import models, utils, openpgp, announcements, setup_tokens, mail_crypt
 from datetime import date, datetime, timedelta, timezone
 import hashlib
 from markupsafe import escape
@@ -164,6 +164,45 @@ def user_settings(user_email):
     return flask.render_template('user/settings.html', form=form, user=user)
 
 
+@ui.route('/user/encryption', methods=['GET', 'POST'])
+@access.authenticated
+def user_encryption():
+    user = models.db.session.get(models.User, flask_login.current_user.email)
+    if not user or not user.enabled:
+        flask.abort(403)
+    form = forms.MailCryptAccessForm() if user.mail_crypt_key else forms.MailCryptForm()
+    recovery = None
+    if form.validate_on_submit():
+        if utils.is_demo_account(user):
+            flask.abort(403)
+        if user.mail_crypt_key:
+            if form.unlock.data:
+                secret = mail_crypt.unlock_webmail(user, form.password.data, flask.session.sid)
+                response = flask.redirect(app.config['WEB_WEBMAIL'])
+                response.set_cookie(mail_crypt.WEBMAIL_COOKIE, secret, max_age=mail_crypt.WEBMAIL_TTL,
+                                    secure=app.config['SESSION_COOKIE_SECURE'], httponly=True, samesite='Strict')
+                response.headers['Cache-Control'] = 'no-store'
+                return response
+            if form.recovery.data:
+                recovery = mail_crypt.recovery_token(user, form.password.data)
+                models.db.session.commit()
+                response = flask.make_response(flask.render_template('user/encryption.html', user=user, form=form, recovery=recovery))
+                response.headers['Cache-Control'] = 'no-store'
+                return response
+            if form.recover.data and form.new_password.data:
+                user.set_password(form.new_password.data, unlock_secret=form.password.data, unlock_id='recovery')
+                mail_crypt.revoke_webmail(user)
+                models.db.session.commit()
+                flask.flash('Mailbox password recovered. Existing clients must sign in again.', 'success')
+                return flask.redirect(flask.url_for('sso.login'))
+            flask.abort(400)
+        mail_crypt.enable(user, form.password.data)
+        models.db.session.commit()
+        flask.flash('Encryption is saved for new mail processes. Ask your operator to disconnect/restart existing processes, enroll app tokens, and export a key backup before migrating old mail.', 'success')
+        return flask.redirect(flask.url_for('.user_encryption'))
+    return flask.render_template('user/encryption.html', user=user, form=form)
+
+
 def wkd_lookup(key_hash, domain_name=None):
     domain_name = _wkd_domain_from_request(domain_name)
     if len(key_hash) != 32 or any(c not in 'ybndrfg8ejkmcpqxot1uwisza345h769' for c in key_hash):
@@ -207,7 +246,8 @@ def _process_password_change(form, user_email):
                 flask.flash(msg, "error")
                 return flask.render_template('user/password.html', form=form, user=user)
             flask.session.regenerate()
-            user.set_password(form.pw.data, keep_sessions=set(flask.session))
+            user.set_password(form.pw.data, keep_sessions=set(flask.session),
+                              unlock_secret=getattr(form, 'current_pw', None).data if hasattr(form, 'current_pw') else None)
             models.db.session.commit()
             flask.flash('Password updated for %s' % user)
             if user_email:

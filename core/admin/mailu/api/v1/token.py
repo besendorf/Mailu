@@ -6,7 +6,7 @@ from passlib import pwd
 
 from . import api, response_fields
 from .. import common
-from ... import models, utils
+from ... import models, utils, mail_crypt
 
 db = models.db
 
@@ -22,12 +22,14 @@ token_user_fields = api.model('TokenGetResponse', {
 })
 
 token_user_fields_post = api.model('TokenPost', {
+    'mailbox_password': fields.String(description='Required to enroll a token for an encrypted mailbox; never returned'),
     'email': fields.String(description='The email address of the user', example='John.Doe@example.com', attribute='user_email', required=True),
     'comment': fields.String(description='A description for the token. This description is shown on the Authentication tokens page', example='my comment'),
     'AuthorizedIP': fields.List(fields.String(description='White listed IP addresses or networks that may use this token.', example="203.0.113.0/24")),
 })
 
 token_user_fields_post2 = api.model('TokenPost2', {
+    'mailbox_password': fields.String(description='Required to enroll a token for an encrypted mailbox; never returned'),
     'comment': fields.String(description='A description for the token. This description is shown on the Authentication tokens page', example='my comment'),
     'AuthorizedIP': fields.List(fields.String(description='White listed IP addresses or networks that may use this token.', example="203.0.113.0/24")),
 })
@@ -86,6 +88,8 @@ class Tokens(Resource):
         raw_password = pwd.genword(entropy=128, length=32, charset="hex")
         token_new.set_password(raw_password)
         models.db.session.add(token_new)
+        models.db.session.flush()
+        mail_crypt.enroll_token(user_found, token_new, raw_password, data.get('mailbox_password'))
         #apply the changes
         db.session.commit()
         response_dict  = {
@@ -158,6 +162,8 @@ class Token(Resource):
         raw_password = pwd.genword(entropy=128, length=32, charset="hex")
         token_new.set_password(raw_password)
         models.db.session.add(token_new)
+        models.db.session.flush()
+        mail_crypt.enroll_token(user_found, token_new, raw_password, data.get('mailbox_password'))
         #apply the changes
         db.session.commit()
         response_dict  = {
@@ -235,6 +241,7 @@ class Token(Resource):
         token = models.db.session.get(models.Token, token_id)
         if not token:
             return { 'code' : 404, 'message' : f'Record cannot be found for id {token_id} or invalid id provided'}, 404
+        mail_crypt.forget_token(token)
         db.session.delete(token)
         db.session.commit()
         return {'code': 200, 'message': f'Token with id {token_id} has been deleted'}, 200

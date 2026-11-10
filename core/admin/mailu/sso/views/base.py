@@ -88,6 +88,11 @@ def login(target):
                 auth_flow.require_actions(flask.session, actions, destination)
                 destination = flask.url_for(auth_flow.ACTION_ENDPOINTS[actions[0]])
             response = _clear_webmail_cookies(flask.redirect(destination))
+            if user.mail_crypt_key and not actions:
+                from mailu import mail_crypt
+                secret = mail_crypt.unlock_webmail(user, form.pw.data, flask.session.sid)
+                response.set_cookie(mail_crypt.WEBMAIL_COOKIE, secret, max_age=mail_crypt.WEBMAIL_TTL,
+                                    secure=app.config['SESSION_COOKIE_SECURE'], httponly=True, samesite='Strict')
             response.set_cookie('rate_limit', utils.limiter.device_cookie(username), max_age=31536000, path=flask.url_for('sso.login'), secure=app.config['SESSION_COOKIE_SECURE'], httponly=True)
             flask.current_app.logger.info(f'Login attempt for: {username}/sso/{flask.request.headers.get("X-Forwarded-Proto")} from: {client_ip}/{client_port}: success: password: {form.pwned.data}')
             if msg := utils.isBadOrPwned(form):
@@ -141,7 +146,7 @@ def pw_change():
         if user:
             flask.session.regenerate()
             flask_login.login_user(user)
-            user.set_password(form.pw.data, keep_sessions=set(flask.session))
+            user.set_password(form.pw.data, keep_sessions=set(flask.session), unlock_secret=form.oldpw.data)
             user.change_pw_next_login = False
             models.db.session.commit()
             flask.current_app.logger.info(f'Forced password change by {user} from: {client_ip}/{client_port}: success: password: {form.pwned.data}')
@@ -160,6 +165,9 @@ def pw_change():
 @sso.route('/logout', methods=['GET'])
 @access.authenticated
 def logout():
+    from mailu import mail_crypt
+    mail_crypt.revoke_webmail(flask_login.current_user)
+    models.db.session.commit()
     flask_login.logout_user()
     flask.session.destroy()
     response = flask.redirect(app.config['PROXY_AUTH_LOGOUT_URL'] or flask.url_for('.login'))
@@ -170,7 +178,7 @@ Drop any webmail session left over from a previous login: its credentials
 are bound to the Mailu session that was just replaced and no longer work.
 """
 def _clear_webmail_cookies(response):
-    for cookie in ['roundcube_sessauth', 'roundcube_sessid', 'smsession']:
+    for cookie in ['roundcube_sessauth', 'roundcube_sessid', 'smsession', 'mailu_mailbox_unlock']:
         response.set_cookie(cookie, 'empty', expires=0)
     return response
 

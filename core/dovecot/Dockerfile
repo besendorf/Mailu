@@ -15,6 +15,7 @@ COPY conf/ /conf/
 COPY start.py /
 COPY migrate_mail.py /
 COPY rebuild_fts.py /
+COPY encrypt_maildir.py /
 COPY fts_settings.py /
 COPY supervisor-healthcheck /usr/local/bin/supervisor-healthcheck
 

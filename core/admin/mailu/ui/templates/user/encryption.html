@@ -1,0 +1,27 @@
+{% extends "form.html" %}
+{% block title %}{{ _('Mailbox encryption') }}{% endblock %}
+{% block content %}
+{% call macros.card() %}
+<p>{% trans %}Mailbox encryption protects newly stored message files with a separate key for your account. Your password and enrolled app tokens unlock that key.{% endtrans %}</p>
+<ul>
+  <li>{% trans %}An operator must disconnect and restart existing mail processes before relying on encryption. Active sessions keep their previous storage settings.{% endtrans %}</li>
+  <li>{% trans %}Existing messages, old backups, mail queues and logs are not encrypted by enabling this setting. Ask your operator to migrate existing mail while the mailbox is offline.{% endtrans %}</li>
+  <li>{% trans %}After signing in with a passkey, unlock webmail below with your mailbox password. OAuth authorization also asks for this password to enroll the mail application.{% endtrans %}</li>
+  <li>{% trans %}Full-text indexing is disabled. Mail indexes and header caches stay in process memory. Existing disk indexes must be removed during migration.{% endtrans %}</li>
+  <li>{% trans %}An administrator cannot recover encrypted mail by resetting your password. Keep a working password or enrolled app token and a backup of the encrypted key envelopes.{% endtrans %}</li>
+  <li>{% trans %}The running server still handles plaintext. Signing out of the web interface does not disconnect email clients or erase keys from active sessions.{% endtrans %}</li>
+</ul>
+{% if user.mail_crypt_key %}
+<p role="status">{% trans %}Encryption is enabled for future writes. Enroll each app token before using it to access this mailbox.{% endtrans %}</p>
+<a href="{{ url_for('.token_create') }}">{{ _('Create an enrolled app token') }}</a>
+{% if recovery %}
+<p role="status">Save this recovery token offline now. It is shown only once. It replaces any previous recovery token.</p>
+<code>{{ recovery }}</code>
+{% endif %}
+<p>Enter your mailbox password to unlock webmail or generate a recovery token. To recover a forgotten password, enter your saved recovery token and choose a new password. A passkey signs you in but cannot decrypt mail by itself.</p>
+{{ macros.form(form, cancel=False) }}
+{% else %}
+{{ macros.form(form, cancel=False) }}
+{% endif %}
+{% endcall %}
+{% endblock %}

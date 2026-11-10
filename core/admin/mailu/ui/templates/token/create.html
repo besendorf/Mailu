@@ -11,6 +11,9 @@
 {%- block content %}
 {%- call macros.card() %}
 <p>{% trans %}Create one token per email app or device. Copy the token below before saving: it cannot be displayed again. Save it in your app's password field for both incoming and outgoing mail, then let the app remember it.{% endtrans %}</p>
+{% if user.mail_crypt_key %}
+<p>{% trans %}Enter your mailbox encryption password to let this token unlock encrypted mail. The password is used only for this enrollment and is not saved.{% endtrans %}</p>
+{% endif %}
 {{ macros.form(form, cancel=False) }}
 {%- endcall %}
 {%- endblock %}
