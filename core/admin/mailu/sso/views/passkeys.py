@@ -504,7 +504,7 @@ def passkey_authenticate():
     flask.session.regenerate()
     flask_login.login_user(credential.user)
     if (credential.user.mail_crypt_key and destination
-            and destination.startswith(flask.current_app.config['WEB_WEBMAIL'])):
+            and signin.is_webmail_destination(destination)):
         destination = flask.url_for('ui.user_encryption')
     response = signin.remember_preference(
         flask.jsonify(redirect=destination or flask.current_app.config['WEB_ADMIN']),

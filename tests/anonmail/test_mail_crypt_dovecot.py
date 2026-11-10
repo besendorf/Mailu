@@ -354,11 +354,11 @@ service lmtp {{
                     pytest.fail(error.decode())
                 time.sleep(0.05)
         # No IMAP login has occurred: LMTP must deliver using only the public key.
-        with smtplib.LMTP('127.0.0.1', lmtp_port) as delivery:
+        with smtplib.LMTP('127.0.0.1', lmtp_port, timeout=20) as delivery:
             assert delivery.sendmail('sender@example.org', [encrypted_user.email], MESSAGE) == {}
         files = list((home / 'mail/new').glob('*'))
         assert len(files) == 1 and files[0].read_bytes().startswith(migration.MAGIC)
-        with imaplib.IMAP4('127.0.0.1', imap_port) as client:
+        with imaplib.IMAP4('127.0.0.1', imap_port, timeout=20) as client:
             with pytest.raises(imaplib.IMAP4.error):
                 client.login(encrypted_user.email, 'wrong')
             assert client.login(encrypted_user.email, 'test-password')[0] == 'OK'
@@ -373,7 +373,7 @@ service lmtp {{
         mail_crypt.enroll_token(encrypted_user, token, raw_token, 'test-password')
         models.db.session.commit()
         app.config['AUTH_REQUIRE_TOKENS'] = True
-        with imaplib.IMAP4('127.0.0.1', imap_port) as client:
+        with imaplib.IMAP4('127.0.0.1', imap_port, timeout=20) as client:
             assert client.login(encrypted_user.email, raw_token)[0] == 'OK'
             assert client.select('INBOX')[0] == 'OK'
             status, data = client.fetch('1', '(BODY[])')
@@ -385,7 +385,7 @@ service lmtp {{
             wrapped = mail_crypt.wrap(encrypted_user, seed, unlock_secret='test-password')
             tokens = oauth2._issue_tokens(encrypted_user.email, 'mailu', 'imap offline_access', unlock_secret=seed, wrapped=wrapped)
         bearer = tokens['access_token']
-        with imaplib.IMAP4('127.0.0.1', imap_port) as client:
+        with imaplib.IMAP4('127.0.0.1', imap_port, timeout=20) as client:
             assert client.authenticate('XOAUTH2', lambda _: f'user={encrypted_user.email}\x01auth=Bearer {bearer}\x01\x01'.encode())[0] == 'OK'
             assert client.select('INBOX')[0] == 'OK'
             status, data = client.fetch('1', '(BODY[])')
@@ -394,7 +394,7 @@ service lmtp {{
         secret = mail_crypt.unlock_webmail(encrypted_user, 'test-password', 'test-session')
         from mailu.internal import nginx
         monkeypatch.setattr(nginx, 'WEBMAIL_PORTS', nginx.WEBMAIL_PORTS + [str(imap_port)])
-        with imaplib.IMAP4('127.0.0.1', imap_port) as client:
+        with imaplib.IMAP4('127.0.0.1', imap_port, timeout=20) as client:
             assert client.login(encrypted_user.email, secret)[0] == 'OK'
             assert client.select('INBOX')[0] == 'OK'
             status, data = client.fetch('1', '(BODY[])')
@@ -406,7 +406,7 @@ service lmtp {{
         models.db.session.commit()
         with app.test_request_context('/admin/oauth2/token'):
             plain_tokens = oauth2._issue_tokens(plain.email, 'mailu', 'imap')
-        with imaplib.IMAP4('127.0.0.1', imap_port) as client:
+        with imaplib.IMAP4('127.0.0.1', imap_port, timeout=20) as client:
             plain_bearer = plain_tokens['access_token']
             assert client.authenticate('XOAUTH2', lambda _: f'user={plain.email}\x01auth=Bearer {plain_bearer}\x01\x01'.encode())[0] == 'OK'
             assert client.append('INBOX', None, None, MESSAGE)[0] == 'OK'

@@ -117,3 +117,10 @@ def test_oauth_prefetch_rejects_stored_control_characters(app, client, encrypted
 
     monkeypatch.setattr(dovecot, '_userdb_fields', injected)
     assert client.post('/internal/oauth2/introspect', data={'token': tokens['access_token']}).json == {'active': False}
+
+
+def test_expired_unlock_routes_to_unlock_without_capturing_admin_at_root(app, client, encrypted_user):
+    app.config.update(WEB_WEBMAIL='/', WEBMAIL='roundcube')
+    sign_in_test_user(client, encrypted_user)
+    assert client.get('/sso/login/admin').location == '/admin'
+    assert client.get('/sso/login/webmail').location == '/admin/user/encryption'
