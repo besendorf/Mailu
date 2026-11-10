@@ -413,7 +413,7 @@ service lmtp {{
             assert client.select('INBOX')[0] == 'OK'
             status, data = client.fetch('1', '(BODY[])')
             assert status == 'OK' and any(MESSAGE in item[1] for item in data if isinstance(item, tuple))
-        assert any(MESSAGE in path.read_bytes() for path in (tmp_path / 'plain-home' / 'mail').rglob('*') if path.is_file())
+        assert any(b'private-body-948277' in path.read_bytes() for path in (tmp_path / 'plain-home' / 'mail').rglob('*') if path.is_file())
     finally:
         process.terminate()
         _out, diagnostics = process.communicate(timeout=5)
