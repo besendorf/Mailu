@@ -338,7 +338,7 @@ service lmtp {{
         from mailu.oauth2 import issuer
         oauth_config = oauth_config.replace('{{ oauth2_issuers }}', issuer())
     with config.open('a') as handle:
-        handle.write(oauth_config + '\nauth_mechanisms { plain = yes\n xoauth2 = yes\n}\n')
+        handle.write(oauth_config + '\nauth_mechanisms {\n plain = yes\n xoauth2 = yes\n}\n')
     process = subprocess.Popen(prefix + [master, '-F', '-c', str(config)], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     try:
         deadline = time.monotonic() + 15
