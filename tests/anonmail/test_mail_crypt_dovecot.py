@@ -400,7 +400,7 @@ service lmtp {{
             status, data = client.fetch('1', '(BODY[])')
             assert status == 'OK' and any(MESSAGE in item[1] for item in data if isinstance(item, tuple))
         # OAuth does not add an empty mail-crypt key to unencrypted accounts.
-        plain = models.User(localpart='plain', domain=encrypted_user.domain, dovecot_uid=os.getuid())
+        plain = models.User(localpart='plain', domain=encrypted_user.domain)
         plain.set_password('plain-password')
         models.db.session.add(plain)
         models.db.session.commit()
