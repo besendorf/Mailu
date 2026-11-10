@@ -170,10 +170,32 @@ def user_encryption():
     user = models.db.session.get(models.User, flask_login.current_user.email)
     if not user or not user.enabled:
         flask.abort(403)
-    form = forms.MailCryptForm()
+    form = forms.MailCryptAccessForm() if user.mail_crypt_key else forms.MailCryptForm()
+    recovery = None
     if form.validate_on_submit():
         if utils.is_demo_account(user):
             flask.abort(403)
+        if user.mail_crypt_key:
+            if form.unlock.data:
+                secret = mail_crypt.unlock_webmail(user, form.password.data, flask.session.sid)
+                response = flask.redirect(app.config['WEB_WEBMAIL'])
+                response.set_cookie(mail_crypt.WEBMAIL_COOKIE, secret, max_age=mail_crypt.WEBMAIL_TTL,
+                                    secure=app.config['SESSION_COOKIE_SECURE'], httponly=True, samesite='Strict')
+                response.headers['Cache-Control'] = 'no-store'
+                return response
+            if form.recovery.data:
+                recovery = mail_crypt.recovery_token(user, form.password.data)
+                models.db.session.commit()
+                response = flask.make_response(flask.render_template('user/encryption.html', user=user, form=form, recovery=recovery))
+                response.headers['Cache-Control'] = 'no-store'
+                return response
+            if form.recover.data and form.new_password.data:
+                user.set_password(form.new_password.data, unlock_secret=form.password.data, unlock_id='recovery')
+                mail_crypt.revoke_webmail(user)
+                models.db.session.commit()
+                flask.flash('Mailbox password recovered. Existing clients must sign in again.', 'success')
+                return flask.redirect(flask.url_for('sso.login'))
+            flask.abort(400)
         mail_crypt.enable(user, form.password.data)
         models.db.session.commit()
         flask.flash('Encryption is saved for new mail processes. Ask your operator to disconnect/restart existing processes, enroll app tokens, and export a key backup before migrating old mail.', 'success')

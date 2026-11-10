@@ -38,11 +38,24 @@ userdb, iteration and LMTP requests return only the public key and never unlock.
 Private responses have `Cache-Control: no-store`. Malformed key records cause
 temporary lookup failures, not an unknown-recipient bounce or plaintext fallback.
 
-OAuth tokens, WebAuthn assertions and derived webmail session tokens are not
-unlock credentials. Encrypted accounts reject OAuth mail introspection and
-webmail SSO. Passkeys still work for account administration; encrypted mailbox
-access uses an enrolled app token. This is an explicit restriction, not an
-implementation of WebAuthn PRF or an in-memory unlock broker.
+Webmail uses random one-hour credentials wrapped in separate envelope records;
+only their hashes are stored. An HttpOnly cookie holds the secret and its record
+is bound to the authenticated Mailu session. Front restricts these credentials
+to webmail listeners; Dovecot additionally accepts the trusted front's backend
+hop. Logout and password changes revoke them. Passkey sign-in redirects to an
+explicit password-based mailbox unlock screen; WebAuthn PRF is not required.
+
+OAuth authorization wraps the key under the random one-time authorization code.
+After PKCE verification, token exchange rewraps it under a fresh random secret
+carried in signed v2 access/refresh tokens, never stored unencrypted by admin.
+Refresh preserves this secret and rotates the generation. The server signing key
+and database alone cannot reconstruct a bearer token or unlock its envelope.
+Successful introspection supplies a private passdb field; Lua combines it with
+public userdb settings. Plaintext accounts and LMTP retain their existing paths.
+
+An independent, user-held recovery token occupies a normal credential slot.
+Replacement invalidates the previous slot, and successful recovery consumes it.
+No administrative recovery/master key is introduced.
 
 ## Dovecot storage and delivery
 

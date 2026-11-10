@@ -51,7 +51,17 @@ def pending():
     return None
 
 def resolve(target=None):
-    return target_path(target) if target else pending() or target_path(default_target())
+    destination = target_path(target) if target else pending() or target_path(default_target())
+    import flask_login
+    from mailu import mail_crypt
+    user = flask_login.current_user
+    if (user.is_authenticated and user.mail_crypt_key is not None
+            and destination.startswith(flask.current_app.config['WEB_WEBMAIL'])):
+        secret = flask.request.cookies.get(mail_crypt.WEBMAIL_COOKIE, '')
+        record = mail_crypt.webmail_record(user, secret)
+        if record is None or record.session_hash != mail_crypt.digest(flask.session.sid):
+            return flask.url_for('ui.user_encryption')
+    return destination
 
 def clear():
     flask.session.pop(KEY, None)

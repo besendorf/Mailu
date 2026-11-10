@@ -137,7 +137,7 @@ def mail_crypt_enroll_token(username, token_id):
 @mail_crypt_commands.command('change-password')
 @click.argument('username')
 @click.option('--unlock-id', default='password', show_default=True,
-              help='Use token-N for recovery with an enrolled app token.')
+              help='Use recovery for a recovery token, or token-N for an enrolled app token.')
 @with_appcontext
 def mail_crypt_change_password(username, unlock_id):
     """Change password and rewrap the existing mailbox key atomically."""
@@ -152,6 +152,26 @@ def mail_crypt_change_password(username, unlock_id):
         db.session.rollback()
         raise click.ClickException(str(error)) from None
     click.echo('Password changed; the mailbox key is unchanged. Disconnect old mail sessions separately.')
+
+
+@mail_crypt_commands.command('recovery-token')
+@click.argument('username')
+@with_appcontext
+def mail_crypt_recovery_token(username):
+    """Generate and display a new user-held recovery token once."""
+    from mailu import mail_crypt
+    account = _crypt_user(username)
+    if account.mail_crypt_key is None:
+        raise click.ClickException('Mailbox encryption is not enabled.')
+    password = click.prompt('Mailbox encryption password', hide_input=True)
+    try:
+        secret = mail_crypt.recovery_token(account, password)
+        db.session.commit()
+    except mail_crypt.MailCryptError as error:
+        db.session.rollback()
+        raise click.ClickException(str(error)) from None
+    click.echo('Save this recovery token offline; any previous recovery token is replaced:')
+    click.echo(secret)
 
 
 @mail_crypt_commands.command('export')

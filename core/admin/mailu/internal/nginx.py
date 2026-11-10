@@ -42,6 +42,10 @@ def check_credentials(user, password, ip, protocol=None, auth_port=None, source_
     if not user or not user.enabled or (protocol == "imap" and not user.enable_imap and not auth_port in WEBMAIL_PORTS) or (protocol == "pop3" and not user.enable_pop):
         app.logger.info(f'Login attempt for: {user or raw_user!r}/{protocol}/{auth_port} from: {ip}/{source_port}: failed: account disabled')
         return False
+    if password.startswith('crypt-'):
+        from mailu import mail_crypt
+        return (auth_port in WEBMAIL_PORTS and protocol in ('imap', 'smtp', 'submission', 'sieve')
+                and mail_crypt.webmail_record(user, password) is not None)
     # webmails
     if auth_port in WEBMAIL_PORTS and password.startswith('token-'):
         if utils.verify_temp_token(user.get_id(), password):

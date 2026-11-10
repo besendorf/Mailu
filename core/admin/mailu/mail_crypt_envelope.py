@@ -208,6 +208,14 @@ def replace_credential(document, credential_id, secret, *, unlock_id, unlock_sec
     return result
 
 
+def credential_document(document, credential_id, secret, *, unlock_id, unlock_secret, mailbox_id):
+    """Wrap the same key for a separate, revocable credential record."""
+    private_key = unlock(document, unlock_id, unlock_secret, mailbox_id=mailbox_id)
+    result = {**document, "slots": {}}
+    result["slots"][credential_id] = _slot(result, credential_id, secret, private_key)
+    return result
+
+
 def remove_credential(document, credential_id, *, unlock_id, unlock_secret, mailbox_id):
     """Remove a slot. Revocation also requires invalidating live sessions."""
     unlock(document, unlock_id, unlock_secret, mailbox_id=mailbox_id)

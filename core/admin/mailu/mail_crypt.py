@@ -6,7 +6,13 @@ master key, or token-derived server-side fallback is used.
 
 import base64
 import copy
+import functools
 import ipaddress
+import hashlib
+import secrets
+import time
+
+import flask
 import threading
 import uuid
 
@@ -62,6 +68,8 @@ def rewrap_password(user, password, unlock_secret, unlock_id='password'):
         )
     except envelope.KeyringError:
         raise MailCryptError('The mailbox unlock credential is invalid.') from None
+    if unlock_id == 'recovery':
+        del result['slots']['recovery']
     user.mail_crypt_key.envelope = envelope.dumps(result)
 
 
@@ -133,12 +141,23 @@ def private_fields(user, secret, ip, protocol, auth_port):
     if not _unlock_budget.acquire(blocking=False):
         raise MailCryptError('Mailbox unlock is busy; try again.')
     try:
-        if not check_credentials(user, secret, ip, protocol, auth_port):
+        # Front has already enforced the webmail-only listener policy. Its
+        # Dovecot connection uses port 143 and originates from the trusted net.
+        credential_port = auth_port
+        if (secret.startswith('crypt-') and protocol == 'imap' and str(auth_port) == '143'
+                and utils.is_ip_in_subnet(ip, [net for net in (app.config['SUBNET'], app.config['SUBNET6']) if net])):
+            credential_port = '10143'
+        if not check_credentials(user, secret, ip, protocol, credential_port):
             raise MailCryptError('Mailbox authentication failed.')
         # A webmail temporary token is not a decryption credential, even if it
         # authenticates. Never try it as a primary password.
         if secret.startswith('token-'):
             raise MailCryptError('Webmail requires a separate mailbox unlock.')
+        if secret.startswith('crypt-'):
+            record = webmail_record(user, secret)
+            if record is None:
+                raise MailCryptError('Webmail unlock expired.')
+            return private_key_fields(_unwrap(user, record.envelope, secret))
         slot = 'password'
         if utils.is_app_token(secret):
             token = next((token for token in user.tokens if token.check_password(secret)), None)
@@ -149,9 +168,100 @@ def private_fields(user, secret, ip, protocol, auth_port):
             pem = envelope.private_pem(result, slot, secret, mailbox_id=user.mail_crypt_key.mailbox_id)
         except envelope.KeyringError:
             raise MailCryptError('This credential cannot unlock the mailbox; enroll an app token or use the mailbox password.') from None
-        return {
-            'crypt_global_private_key': 'mailu',
-            'crypt_global_private_key/mailu/crypt_private_key_file': _inline(pem),
-        }
+        return private_key_fields(pem)
     finally:
         _unlock_budget.release()
+
+
+WEBMAIL_COOKIE = 'mailu_mailbox_unlock'
+WEBMAIL_TTL = 3600
+
+
+def digest(value):
+    return hashlib.sha256(value if isinstance(value, bytes) else value.encode('utf-8')).hexdigest()
+
+
+def bounded_kdf(function):
+    @functools.wraps(function)
+    def guarded(*args, **kwargs):
+        if not _unlock_budget.acquire(blocking=False):
+            raise MailCryptError('Mailbox unlock is busy; try again.')
+        try:
+            return function(*args, **kwargs)
+        finally:
+            _unlock_budget.release()
+    return guarded
+
+
+@bounded_kdf
+
+def wrap(user, secret, *, source=None, unlock_id='password', unlock_secret):
+    """Create an independent envelope without consuming password/token slots."""
+    try:
+        return envelope.dumps(envelope.credential_document(
+            source or document(user), 'credential', secret,
+            unlock_id=unlock_id, unlock_secret=unlock_secret,
+            mailbox_id=user.mail_crypt_key.mailbox_id))
+    except envelope.KeyringError:
+        raise MailCryptError('The mailbox unlock credential is invalid.') from None
+
+
+def _unwrap(user, serialized, secret):
+    try:
+        result = envelope.loads(serialized.encode('utf-8'))
+        if result['public_key'] != document(user)['public_key']:
+            raise envelope.KeyringError('Mailbox key mismatch')
+        return envelope.private_pem(result, 'credential', secret,
+                                    mailbox_id=user.mail_crypt_key.mailbox_id)
+    except (envelope.KeyringError, AttributeError):
+        raise MailCryptError('This credential cannot unlock the mailbox.') from None
+
+
+def webmail_record(user, secret):
+    if not isinstance(secret, str) or not secret.startswith('crypt-') or len(secret) != 49:
+        return None
+    return models.MailCryptSession.query.filter_by(
+        token_hash=digest(secret), user_email=user.email,
+    ).filter(models.MailCryptSession.expires_at > int(time.time())).first()
+
+
+def unlock_webmail(user, password, session_id):
+    # An authenticated account session is required by the caller. The password
+    # is used for decryption, including after passkey or proxy sign-in.
+    secret = 'crypt-' + secrets.token_urlsafe(32)
+    wrapped = wrap(user, secret, unlock_secret=password)
+    models.MailCryptSession.query.filter_by(user_email=user.email).filter(
+        models.MailCryptSession.expires_at <= int(time.time())).delete()
+    models.MailCryptSession.query.filter_by(
+        user_email=user.email, session_hash=digest(session_id)).delete()
+    models.db.session.add(models.MailCryptSession(
+        user=user, token_hash=digest(secret), session_hash=digest(session_id),
+        expires_at=int(time.time()) + WEBMAIL_TTL, envelope=wrapped))
+    models.db.session.commit()
+    return secret
+
+
+def revoke_webmail(user):
+    models.MailCryptSession.query.filter_by(user_email=user.email).delete()
+
+
+@bounded_kdf
+def recovery_token(user, password):
+    secret = secrets.token_urlsafe(32)
+    result = document(user)
+    operation = envelope.replace_credential if 'recovery' in result['slots'] else envelope.add_credential
+    try:
+        result = operation(result, 'recovery', secret, unlock_id='password',
+                           unlock_secret=password, mailbox_id=user.mail_crypt_key.mailbox_id)
+    except envelope.KeyringError:
+        raise MailCryptError('Check the mailbox password and available credential slots.') from None
+    user.mail_crypt_key.envelope = envelope.dumps(result)
+    return secret
+
+
+def private_key_fields(pem):
+    return {'crypt_global_private_key': 'mailu',
+            'crypt_global_private_key/mailu/crypt_private_key_file': _inline(pem)}
+
+
+unwrap = bounded_kdf(_unwrap)

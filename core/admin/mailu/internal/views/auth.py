@@ -78,12 +78,18 @@ def user_authentication():
     """
     if (not flask_login.current_user.is_anonymous
         and flask_login.current_user.enabled):
+        from mailu import mail_crypt
+        unlock = None
         if flask_login.current_user.mail_crypt_key is not None:
-            flask.abort(403, 'This mailbox is encrypted. Use an email client with an enrolled app token; webmail session tokens cannot unlock it.')
+            secret = flask.request.cookies.get(mail_crypt.WEBMAIL_COOKIE, '')
+            unlock = mail_crypt.webmail_record(flask_login.current_user, secret)
+            if unlock is None or unlock.session_hash != mail_crypt.digest(flask.session.sid):
+                flask.abort(403, 'Unlock your mailbox from the mailbox encryption settings before opening webmail.')
         response = flask.Response()
         email = flask_login.current_user.get_id()
         response.headers["X-User"] = models.IdnaEmail.process_bind_param(flask_login, email, "")
-        response.headers["X-User-Token"] = utils.gen_temp_token(email, flask.session)
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["X-User-Token"] = secret if unlock is not None else utils.gen_temp_token(email, flask.session)
         original_uri = flask.request.headers.get("X-Mailu-Original-URI", "").split("?", 1)[0]
         if original_uri.endswith("/sso.php"):
             storage_email = models.IdnaEmail.process_bind_param(flask_login, email, "")

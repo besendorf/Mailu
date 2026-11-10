@@ -263,7 +263,9 @@ def test_daemon_lmtp_and_authenticated_lua_prefetch(dovecot, encrypted_user, app
 
     def fields(user):
         result = original_fields(user)
-        result.update(home=str(home), uid=os.getuid(), gid=os.getgid(), mail_temp_dir=str(tmp_path))
+        target = home if user.email == encrypted_user.email else tmp_path / 'plain-home'
+        target.mkdir(exist_ok=True)
+        result.update(home=str(target), uid=os.getuid(), gid=os.getgid(), mail_temp_dir=str(tmp_path))
         return result
 
     monkeypatch.setattr(views, '_userdb_fields', fields)
@@ -328,6 +330,15 @@ service lmtp {{
  }}
 }}
 ''')
+    source = (ROOT / 'core/dovecot/conf/dovecot.conf').read_text()
+    start = source.index('\noauth2 {')
+    stop = source.index('\nservice auth {', start)
+    oauth_config = source[start:stop].replace('{{ ADMIN_ADDRESS }}:8080', f'127.0.0.1:{http.server_port}')
+    with app.test_request_context('/'):
+        from mailu.oauth2 import issuer
+        oauth_config = oauth_config.replace('{{ oauth2_issuers }}', issuer())
+    with config.open('a') as handle:
+        handle.write(oauth_config + '\nauth_mechanisms { plain = yes\n xoauth2 = yes\n}\n')
     process = subprocess.Popen(prefix + [master, '-F', '-c', str(config)], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     try:
         deadline = time.monotonic() + 15
@@ -366,6 +377,42 @@ service lmtp {{
             assert client.select('INBOX')[0] == 'OK'
             status, data = client.fetch('1', '(BODY[])')
             assert status == 'OK' and any(MESSAGE in item[1] for item in data if isinstance(item, tuple))
+        # Full XOAUTH2 handshake must carry the key through the Lua userdb.
+        from mailu import oauth2
+        with app.test_request_context('/admin/oauth2/token'):
+            seed = 'x' * 43
+            wrapped = mail_crypt.wrap(encrypted_user, seed, unlock_secret='test-password')
+            tokens = oauth2._issue_tokens(encrypted_user.email, 'mailu', 'imap offline_access', unlock_secret=seed, wrapped=wrapped)
+        bearer = tokens['access_token']
+        with imaplib.IMAP4('127.0.0.1', imap_port) as client:
+            assert client.authenticate('XOAUTH2', lambda _: f'user={encrypted_user.email}\x01auth=Bearer {bearer}\x01\x01'.encode())[0] == 'OK'
+            assert client.select('INBOX')[0] == 'OK'
+            status, data = client.fetch('1', '(BODY[])')
+            assert status == 'OK' and any(MESSAGE in item[1] for item in data if isinstance(item, tuple))
+        # A webmail credential can also decrypt after front's trusted backend hop.
+        secret = mail_crypt.unlock_webmail(encrypted_user, 'test-password', 'test-session')
+        from mailu.internal import nginx
+        monkeypatch.setattr(nginx, 'WEBMAIL_PORTS', nginx.WEBMAIL_PORTS + [str(imap_port)])
+        with imaplib.IMAP4('127.0.0.1', imap_port) as client:
+            assert client.login(encrypted_user.email, secret)[0] == 'OK'
+            assert client.select('INBOX')[0] == 'OK'
+            status, data = client.fetch('1', '(BODY[])')
+            assert status == 'OK' and any(MESSAGE in item[1] for item in data if isinstance(item, tuple))
+        # OAuth does not add an empty mail-crypt key to unencrypted accounts.
+        plain = models.User(localpart='plain', domain=encrypted_user.domain, dovecot_uid=os.getuid())
+        plain.set_password('plain-password')
+        models.db.session.add(plain)
+        models.db.session.commit()
+        with app.test_request_context('/admin/oauth2/token'):
+            plain_tokens = oauth2._issue_tokens(plain.email, 'mailu', 'imap')
+        with imaplib.IMAP4('127.0.0.1', imap_port) as client:
+            plain_bearer = plain_tokens['access_token']
+            assert client.authenticate('XOAUTH2', lambda _: f'user={plain.email}\x01auth=Bearer {plain_bearer}\x01\x01'.encode())[0] == 'OK'
+            assert client.append('INBOX', None, None, MESSAGE)[0] == 'OK'
+            assert client.select('INBOX')[0] == 'OK'
+            status, data = client.fetch('1', '(BODY[])')
+            assert status == 'OK' and any(MESSAGE in item[1] for item in data if isinstance(item, tuple))
+        assert any(MESSAGE in path.read_bytes() for path in (tmp_path / 'plain-home' / 'mail').rglob('*') if path.is_file())
     finally:
         process.terminate()
         _out, diagnostics = process.communicate(timeout=5)

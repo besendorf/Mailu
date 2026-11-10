@@ -855,6 +855,7 @@ set() containing the sessions to keep
             if raw:
                 raise mail_crypt.MailCryptError('Cannot import a password hash for an encrypted mailbox; use a plaintext password and an existing unlock credential.')
             mail_crypt.rewrap_password(self, password, unlock_secret, unlock_id)
+            mail_crypt.revoke_webmail(self)
         self._assign_verified_password_hash(password if raw else User.get_password_context().hash(password))
         if sqlalchemy.inspect(self).persistent:
             from mailu.oauth2 import force_user_reauthentication
@@ -1116,6 +1117,20 @@ class MailCryptKey(db.Model):
     __mapper_args__ = {'version_id_col': version}
 
 
+class MailCryptSession(db.Model):
+    """Webmail bearer credentials: only hashes and encrypted key material."""
+
+    __tablename__ = 'mail_crypt_session'
+    __table_args__ = (db.Index('ix_mail_crypt_session_expires_at', 'expires_at'),)
+    metadata = Base.metadata
+    token_hash = db.Column(db.String(64), primary_key=True)
+    user_email = db.Column(db.String(255), db.ForeignKey(User.email), nullable=False)
+    user = db.relationship(User, backref=db.backref('mail_crypt_sessions', cascade='all, delete-orphan'))
+    session_hash = db.Column(db.String(64), nullable=False)
+    expires_at = db.Column(db.Integer, nullable=False)
+    envelope = db.Column(db.Text, nullable=False)
+
+
 class Token(Base):
     """ A token is an application password for a given user.
     """
@@ -1158,6 +1173,7 @@ class OAuth2AuthorizationCode(Base):
     __tablename__ = 'oauth2_authorization_code'
 
     code_hash = db.Column(db.String(64), primary_key=True)
+    mail_crypt_envelope = db.Column(db.Text, nullable=True)
     user_email = db.Column(db.String(255), db.ForeignKey(User.email, ondelete='CASCADE'), nullable=False, index=True)
     user = db.relationship(User, backref=db.backref('oauth2_authorization_codes', cascade='all, delete-orphan'))
     client_id = db.Column(db.String(80), nullable=False)
@@ -1181,6 +1197,7 @@ class OAuth2Grant(Base):
     )
     client_id = db.Column(db.String(80), nullable=False)
     token_generation = db.Column(db.Integer, nullable=False, default=0)
+    mail_crypt_envelope = db.Column(db.Text, nullable=True)
     scope = db.Column(db.String(255), nullable=False)
     access_expires_at = db.Column(db.Integer, nullable=False, index=True)
     refresh_expires_at = db.Column(db.Integer, nullable=True, index=True)

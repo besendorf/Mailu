@@ -12,9 +12,16 @@ Supported access and limitations
 * IMAP, POP3, submission and ManageSieve use an enrolled app token. Primary
   passwords also work where the existing ``AUTH_REQUIRE_TOKENS`` policy permits
   them. That policy is not weakened by enabling encryption.
-* Webmail SSO and OAuth mail access are unavailable for encrypted accounts.
-  Passkeys can still sign in to account administration. An OAuth token or
-  passkey assertion is not treated as a decryption secret.
+* Webmail uses a separate one-hour unlock credential. Password sign-in unlocks
+  it automatically; after passkey or proxy sign-in, use **Mailbox encryption**
+  to enter the mailbox password. Expiry requires another unlock. The credential
+  is held in an HttpOnly cookie; the database stores its hash and encrypted key,
+  never the bearer secret. Logout or a password change revokes webmail unlocks.
+* OAuth consent asks for the mailbox password. New encrypted grants use v2
+  access/refresh tokens containing a random client-held unlock secret. Only an
+  encrypted key envelope is stored with the grant. Refresh rotates the signed
+  generation; replay revokes the family. Old grants must authorize again when
+  encryption is enabled. Passkey assertions alone cannot decrypt the mailbox.
 * Full-text indexing is disabled. Mail indexes/header caches are kept in
   process memory, with a performance cost when reconnecting to large mailboxes.
   Seekable plaintext temporary streams use the IMAP container's existing tmpfs.
@@ -24,7 +31,7 @@ Supported access and limitations
   server memory need separate protection. Host swap and crash dumps can retain
   memory contents. This is not end-to-end encryption against the server operator.
 * Lost encryption credentials cannot be replaced by an administrative password
-  reset. Keep an independent enrolled app token and encrypted key backups.
+  reset. Keep an independent recovery token or enrolled app token and encrypted key backups.
 
 Activation
 ----------
@@ -145,3 +152,26 @@ Mailu's Lua passdb and userdb. Runtime tests can be run locally by setting the
 ``DOVECOT_TEST_*`` paths documented in
 ``tests/anonmail/test_mail_crypt_dovecot.py``. Hosts prohibiting Unix-domain
 sockets skip the full daemon test; storage/Sieve/migration tests still run.
+
+Recovery tokens
+---------------
+
+Generate a recovery token on **Mailbox encryption**, or run::
+
+    docker compose exec admin flask mailu mail-crypt recovery-token alice@example.org
+
+Save the displayed token offline and export a fresh envelope backup. Generating
+another token replaces the previous token. It occupies one of the 16 credential
+slots (leaving space for the password and 14 app tokens). Recovery consumes the
+recovery slot; generate a new token afterward. If you can still sign in with a
+passkey, use the recovery fields on the encryption page. Otherwise an operator
+can run::
+
+    docker compose exec admin flask mailu mail-crypt change-password alice@example.org --unlock-id recovery
+
+This requires the user's recovery token at the hidden prompt. It does not give
+an operator access without that token. Existing IMAP sessions can retain keys
+until disconnected; logout/revocation prevents new logins but does not terminate
+already established connections. Webmail itself also handles plaintext and may
+store attachments or session credentials; protect its database and temporary
+storage independently from the mailbox volume.
